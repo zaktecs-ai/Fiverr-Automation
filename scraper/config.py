@@ -163,6 +163,12 @@ def validate_config(cfg: dict) -> None:
     check(_bool, maps, "include_permanently_closed")
     for key in ("browser_restart_after_queries", "scroll_delay_min_ms", "scroll_delay_max_ms"):
         check(_int_in, maps, key, 0, 1_000_000, "3 / 800-1600")
+    # hl/gl are two-letter language/region codes.
+    for key in ("hl", "gl"):
+        v = maps.get(key)
+        if v is not None and (not isinstance(v, str) or len(v.strip()) != 2):
+            errors.append(f"ERROR: maps.{key} must be a 2-letter code (e.g. 'en', 'us').\n"
+                          f"Current value: {v!r}")
 
     check(_int_in, website, "max_pages_per_site", 1, 50, "5-10")
     check(_int_in, website, "overall_site_timeout_seconds", 5, 600, "90-120")

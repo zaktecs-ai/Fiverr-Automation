@@ -63,6 +63,8 @@ one search. They run one after another, and results combine into one output.
 maps:
   include_permanently_closed: false
   headless: true
+  hl: en     # interface language (en = English)
+  gl: us     # region (us = United States)
   browser_restart_after_queries: 5
 ```
 
@@ -70,6 +72,7 @@ maps:
 |---------|---------------|-------------|
 | `include_permanently_closed` | `false` = skip closed businesses. `true` = keep them. | `false` |
 | `headless` | `true` = browser runs invisibly (correct for a VPS). | `true` |
+| `hl` / `gl` | Force Google Maps language (`hl: en`) and region (`gl: us`). This keeps results + labels in English regardless of where your VPS is (Germany, UK, etc.). | `en` / `us` |
 | `browser_restart_after_queries` | Restart the browser after this many queries to keep memory healthy. `0` = never. | `5` |
 
 ---

@@ -69,6 +69,8 @@ def main(argv=None) -> int:
         scroll_delay=(maps_cfg.get("scroll_delay_min_ms", 800),
                       maps_cfg.get("scroll_delay_max_ms", 1600)),
         cooldown_seconds=cfg.get("delays", {}).get("cooldown_seconds", 0.0),
+        hl=maps_cfg.get("hl", "en"),
+        gl=maps_cfg.get("gl", "us"),
     )
 
     from scraper.pipeline import Pipeline

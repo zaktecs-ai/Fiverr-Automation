@@ -1,8 +1,24 @@
 """Tests for the pure Maps parsing helpers (no browser required)."""
 from scraper.maps.collector import (
-    decompose_address, detect_bot_challenge, parse_rating_reviews,
+    _with_region, decompose_address, detect_bot_challenge, parse_rating_reviews,
     split_source_location,
 )
+
+
+class TestRegionParam:
+    def test_appends_hl_gl_to_url_with_query(self):
+        url = "https://www.google.com/maps/search/dentists%20in%20Dallas?hl=xx"
+        out = _with_region(url, "en", "us")
+        assert "hl=en" in out
+        assert "gl=us" in out
+
+    def test_appends_when_no_query(self):
+        out = _with_region("https://www.google.com/maps/place/SomePlace", "en", "gb")
+        assert out.endswith("?hl=en&gl=gb")
+
+    def test_overrides_country(self):
+        out = _with_region("https://www.google.com/maps/search/x", "en", "uk")
+        assert "gl=uk" in out
 
 
 class TestParseRatingReviews:

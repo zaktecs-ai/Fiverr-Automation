@@ -29,6 +29,19 @@ log = logging.getLogger(__name__)
 
 MAPS_SEARCH_URL = "https://www.google.com/maps/search/{query}"
 
+
+def _with_region(url: str, hl: str, gl: str) -> str:
+    """Append hl/gl (language/region) params to a Maps URL.
+
+    Google Maps honors `?hl=` for interface language and `?gl=` for region
+    defaults. Forcing these decouples results/UI language from the VPS IP
+    (e.g. a German server still returns English, US-targeted results when the
+    query itself carries a US location). Uses `?` the first time (a bare
+    search path has no query string yet), `&` thereafter.
+    """
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}hl={hl}&gl={gl}"
+
 # ---- Result-card selectors (layered: primary -> alternate -> fallback) ----
 RESULT_CARD_SELECTORS = [
     'a.hfpxzc',                        # legacy-proven result card
@@ -158,7 +171,7 @@ def split_source_location(query: str) -> tuple[str, str]:
 # Browser-bound extraction
 # ---------------------------------------------------------------------------
 
-def _open_business_page(ctx, place_url: str) -> dict:
+def _open_business_page(ctx, place_url: str, hl: str = "en", gl: str = "us") -> dict:
     """Open a single listing and extract fields (layered selectors + regex)."""
     data: dict = {}
     if not place_url:
@@ -166,7 +179,9 @@ def _open_business_page(ctx, place_url: str) -> dict:
     page = ctx.new_page()
     page.set_default_timeout(30_000)
     try:
-        page.goto(place_url, wait_until="domcontentloaded", timeout=30_000)
+        # Force language/region on the business page too, so labels stay English.
+        page.goto(_with_region(place_url, hl, gl),
+                  wait_until="domcontentloaded", timeout=30_000)
         time.sleep(1.5)
 
         data["business_name"] = _first(page, NAME_SELECTORS)
@@ -267,13 +282,15 @@ class MapsCollector:
     def __init__(self, browser_manager, *, max_results_per_query: int = 0,
                  max_total_results: int = 0, include_permanently_closed: bool = False,
                  scroll_delay: tuple[int, int] = (800, 1600),
-                 cooldown_seconds: float = 0.0):
+                 cooldown_seconds: float = 0.0, hl: str = "en", gl: str = "us"):
         self._bm = browser_manager
         self._max_per_query = max_results_per_query
         self._max_total = max_total_results
         self._include_closed = include_permanently_closed
         self._scroll_delay = scroll_delay
         self._cooldown = cooldown_seconds
+        self._hl = hl
+        self._gl = gl
         self._yielded_total = 0
 
     def collect(self, query: str) -> Iterator[dict]:
@@ -281,7 +298,8 @@ class MapsCollector:
         ctx = self._bm.new_context()
         page = ctx.new_page()
         page.set_default_timeout(30_000)
-        url = MAPS_SEARCH_URL.format(query=quote_plus(query))
+        url = _with_region(MAPS_SEARCH_URL.format(query=quote_plus(query)),
+                           self._hl, self._gl)
         yielded = 0
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45_000)
@@ -304,7 +322,7 @@ class MapsCollector:
                     break
                 if self._max_per_query and yielded >= self._max_per_query:
                     break
-                data = _open_business_page(ctx, place_url)
+                data = _open_business_page(ctx, place_url, self._hl, self._gl)
                 if not data.get("business_name"):
                     parsed = parse_google_maps_url(place_url)
                     data["business_name"] = parsed.get("place_name") or "N/A"

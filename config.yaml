@@ -56,6 +56,17 @@ maps:
   # Hide the browser window? Keep true on a VPS (there is no screen).
   headless: true
 
+  # Language & region for Google Maps, INDEPENDENT of your VPS location.
+  #   hl = interface language   (en = English). This keeps labels like
+  #        "Reviews"/"Open" in English even if your server is in Germany/UK/etc.
+  #   gl = region defaults      (us = United States, uk = United Kingdom,
+  #        de = Germany, ae = UAE, ...). Use the region you're targeting.
+  # Your search query already names the location ("dentists in Dallas, TX"),
+  # so results are target-market accurate — these params just force English
+  # labels and the right regional defaults.
+  hl: en
+  gl: us
+
   # Restart the browser every N queries. Keeps memory healthy on long runs.
   # 0 = never restart by count (the engine still recycles on memory pressure).
   # Recommended for 12 GB VPS: 5

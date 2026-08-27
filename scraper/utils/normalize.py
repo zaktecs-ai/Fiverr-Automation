@@ -240,6 +240,29 @@ _JUNK_PATTERNS = [
     re.compile(r"^[^@]+@(amp|sqs|s3|cloudfront|cdn)\."),
 ]
 
+# Personal (free) email providers. These are legitimate contact addresses even
+# though their domain differs from the business website, so they are EXEMPT from
+# the domain-relationship check (a dentist can list a Gmail address).
+PUBLIC_EMAIL_PROVIDERS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "hotmail.com",
+    "outlook.com", "live.com", "msn.com", "aol.com", "icloud.com", "me.com",
+    "mac.com", "proton.me", "protonmail.com", "zoho.com", "gmx.com",
+}
+
+# Disposable / throwaway inboxes — never a real business contact.
+DISPOSABLE_DOMAINS = {
+    "mailinator.com", "10minutemail.com", "10minutemail.net", "tempmail.com",
+    "guerrillamail.com", "yopmail.com", "trashmail.com", "throwawaymail.com",
+    "dispostable.com", "sharklasers.com", "maildrop.cc", "temp-mail.org",
+    "getairmail.com", "mailnesia.com", "tempinbox.com", "spamgourmet.com",
+    "mailnull.com", "mailcatch.com",
+}
+
+# Words that strongly suggest a template/placeholder address — only meaningful
+# when the email domain doesn't match the business website domain.
+_SUSPICIOUS_WORDS = {"theme", "template", "layout", "sample", "fake", "test",
+                     "demo", "example", "placeholder", "yourname", "site"}
+
 
 def is_valid_email(email: str, max_length: int = 120) -> bool:
     """Syntax-validate an email (no DNS)."""
@@ -248,8 +271,16 @@ def is_valid_email(email: str, max_length: int = 120) -> bool:
     return bool(_VALID_EMAIL_RE.match(normalize_email(email)))
 
 
-def email_rejection_reason(email: str, max_length: int = 120) -> str | None:
-    """Return a human reason an email should be rejected, else None."""
+def email_rejection_reason(email: str, max_length: int = 120,
+                           website_url: str | None = None) -> str | None:
+    """Return a human reason an email should be rejected, else None.
+
+    When `website_url` is supplied, an extra domain-relationship check runs:
+    an email whose domain differs from the website — and is not a known
+    personal provider — is rejected only if it also carries a suspicious word
+    (a conservative, legacy-proven heuristic). Personal-provider addresses are
+    always allowed regardless of domain mismatch.
+    """
     e = normalize_email(email)
     if not e:
         return "empty"
@@ -260,14 +291,36 @@ def email_rejection_reason(email: str, max_length: int = 120) -> str | None:
     local, _, domain = e.rpartition("@")
     if domain in _DUMMY_DOMAINS:
         return "dummy_domain"
+    if domain in DISPOSABLE_DOMAINS:
+        return "disposable_domain"
     if local.lower() in _DUMMY_LOCAL:
         return "dummy_local"
     for pat in _JUNK_PATTERNS:
         if pat.search(e):
             return "suspicious_pattern"
+
+    # Domain relationship check (only when we know the website domain).
+    if website_url:
+        web_domain = _website_domain(website_url)
+        if web_domain and domain != web_domain and domain not in PUBLIC_EMAIL_PROVIDERS:
+            if any(w in domain for w in _SUSPICIOUS_WORDS) or \
+                    any(w in local.lower() for w in _SUSPICIOUS_WORDS):
+                return "unrelated_domain_with_suspicious_word"
     return None
 
 
-def is_usable_email(email: str, max_length: int = 120) -> bool:
+def _website_domain(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
+
+
+def is_usable_email(email: str, max_length: int = 120,
+                    website_url: str | None = None) -> bool:
     """True only when the email passes the full static cleaning pipeline."""
-    return email_rejection_reason(email, max_length) is None
+    return email_rejection_reason(email, max_length, website_url) is None

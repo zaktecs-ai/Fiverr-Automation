@@ -145,6 +145,29 @@ Documented in full in `GUIDE.md`.
 
 ---
 
+## Legacy reference analysis
+
+The supplied legacy scraper (`High-Ticket B2B & Luxury Services.py`) was
+analysed and its **field-tested patterns** ported into this engine:
+
+- **Maps selectors**: result cards `a.hfpxzc`, name `h1.DUwDvf`, category
+  `button.DkEaL`, address `button[data-item-id="address"]`, phone
+  `button[data-item-id^="phone:tel:"]`, website `a[data-item-id="authority"]`,
+  claimed via `merchant_claim_business`, plus the feed `div[role="feed"]`.
+- **Rating/reviews regex** (`([1-5]\.\d)`, `\(([\d,]+)\)`, `(\d+) reviews`)
+  used as a semantic fallback alongside the grandparent-header trick.
+- **Address decomposition** into city/state/zip via `\b\d{5}\b`,
+  `\b([A-Z]{2})\b\s*\d{5}`, `,\s*([^,]+?),\s*[A-Z]{2}\s*\d{5}`.
+- **Bot/cooldown detection** markers and configurable cooldown-then-skip.
+- **Email filtering**: dummy/disposable domains, public-provider whitelist,
+  suspicious words, and a domain-relationship check (with personal-provider
+  exemption).
+
+Its weaknesses were explicitly **not** ported: the false-"dead" classification
+on any request exception (including timeouts), the verboten "Lead Score"
+column, the fragile CSV-based dedup, query-only JSON checkpoints, bare
+`except: pass`, hardcoded city/niche lists, and `verify=False` SSL bypass.
+
 ## Assumptions made
 
 These were engineering choices where the spec left room for judgment:

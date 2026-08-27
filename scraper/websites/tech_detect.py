@@ -63,14 +63,17 @@ def _fallback_detect(html: str, headers: dict[str, str]) -> list[str]:
 
 
 def _wappalyzer_detect(url: str, html: str, headers: dict[str, str]) -> list[str]:
-    """Use the wappalyzer library if importable. Never raises on failure."""
+    """Detect technologies with the maintained `wappalyzer-python3` library.
+
+    The package provides module `Wappalyzer` (a maintained fork of the archived
+    python-Wappalyzer). It works directly on an HTML string, so no browser is
+    needed. Never raises on failure — a missing library or a detection error
+    falls back to the built-in regex signatures.
+    """
     try:
-        from wappalyzer import Wappalyzer, WebPage  # type: ignore
-        from wappalyzer.wappalyzer import logger as wz_logger
-        wz_logger.disabled = True
+        from Wappalyzer import Wappalyzer, WebPage  # type: ignore
 
         analyzer = Wappalyzer.latest()
-        # Build a WebPage-like object: it expects html, headers, url.
         wp = WebPage(url=url, html=html, headers=headers or {})
         techs = analyzer.analyze(wp)
         return list(techs)

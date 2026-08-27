@@ -1,4 +1,6 @@
 """Tests for tech detection (regex fallback path; wappalyzer may be absent)."""
+import pytest
+
 from scraper.websites.tech_detect import TechDetector
 
 
@@ -26,3 +28,36 @@ class TestTechDetector:
         assert joined == ""
         assert techs == set()
         assert d.classify(techs)["cms"] == "N/A"
+
+
+class TestWappalyzerIntegration:
+    """Real wappalyzer-python3 integration (skipped if the lib isn't installed)."""
+
+    @pytest.fixture
+    def wappalyzer_available(self):
+        try:
+            import Wappalyzer  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def test_detects_wordpress_from_html(self, wappalyzer_available):
+        if not wappalyzer_available:
+            pytest.skip("wappalyzer-python3 not installed")
+        d = TechDetector(use_wappalyzer=True)
+        html = ('<html><head>'
+                '<meta name="generator" content="WordPress 6.4">'
+                '<script src="https://www.googletagmanager.com/gtag/js"></script>'
+                '</head><body></body></html>')
+        joined, techs = d.detect("https://example.com", html, {"server": "nginx"})
+        lowered = joined.lower()
+        assert "wordpress" in lowered
+        assert "google tag manager" in lowered
+
+    def test_classify_maps_cms(self, wappalyzer_available):
+        if not wappalyzer_available:
+            pytest.skip("wappalyzer-python3 not installed")
+        d = TechDetector(use_wappalyzer=True)
+        html = '<meta name="generator" content="WordPress 6.4">'
+        _, techs = d.detect("https://example.com", html)
+        assert d.classify(techs)["cms"] == "WordPress"

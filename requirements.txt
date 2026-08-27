@@ -10,10 +10,12 @@ dnspython>=2.6         # MX lookups
 # --- Output ---
 openpyxl>=3.1          # XLSX generation from final CSV
 
-# --- Optional / lazy ---
-# Wappalyzer-compatible tech detection is loaded opportunistically if installed;
-# a pure-regex fallback is built in so the engine never depends on it.
-setuptools>=65.0       # needed by some wappalyzer installs
+# --- Technology detection ---
+# Maintained Wappalyzer-compatible library (fork of the archived python-Wappalyzer),
+# detects 1,400+ technologies from HTML + headers. A pure-regex fallback is also
+# built in, so the engine still works if this package is unavailable.
+setuptools>=65.0       # required to build wappalyzer-python3 from sdist
+wappalyzer-python3>=0.0.11
 
 # --- Optional OCR (disabled by default) ---
 # pillow>=10.0

@@ -128,10 +128,18 @@ entries and a config flag — zero core changes.
 
 ## 9. Tech detection
 
-Primary: the open-source **`wappalyzer`** library (Wappalyzer-compatible),
-loaded opportunistically. Fallback: a built-in regex signature table covering
-the most common platforms (WordPress, Shopify, React, GA, GTM, Cloudflare…).
-The engine never hard-depends on a single detector, per the spec.
+Primary: **`wappalyzer-python3`** — the actively-maintained fork of the
+archived `python-Wappalyzer`, publishing 1,400+ Wappalyzer fingerprints and
+detecting technologies directly from the HTML string + headers (no browser
+needed, which keeps the HTTP-first path cheap). Evaluated against the
+alternatives at implementation time: `s0md3v/wappalyzer` (runs the extension
+inside Chromium via Playwright — conflicts with the no-per-page-browser
+principle) and `py-wappalyzer` (1-star, HAR-centric), and `wappalyzer-python3`
+was the clear fit.
+
+Fallback: a built-in regex signature table covering the most common platforms
+(WordPress, Shopify, React, GA, GTM, Cloudflare…). The engine works even if
+`wappalyzer-python3` is absent, per the "never depend on one detector" rule.
 
 ---
 
@@ -177,5 +185,6 @@ These were engineering choices where the spec left room for judgment:
 - CSV written **record-by-record** with `fsync` (accepting a minor throughput
   cost) to guarantee no lost or partial rows after a crash.
 - Queries run sequentially; enrichment parallelized only *within* a query.
-- Wappalyzer is optional; a regex fallback is always present.
+- Wappalyzer (`wappalyzer-python3`) is a declared dependency, but the engine
+  degrades to a regex fallback if it's ever missing or fails.
 - OCR (`pytesseract`) is optional and off by default; not a hard dependency.

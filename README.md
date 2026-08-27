@@ -189,5 +189,6 @@ mocks — no live Google Maps needed.
   rather than guessing.
 - CAPTCHA / anti-bot challenges are **classified and preserved**, never
   bypassed, and never mistaken for a dead website.
-- Wappalyzer tech detection is optional (built-in regex fallback included).
+- Wappalyzer tech detection uses `wappalyzer-python3` (maintained fork, 1,400+
+  fingerprints), with a built-in regex fallback if it's ever unavailable.
 - No paid APIs or third-party verification services required.

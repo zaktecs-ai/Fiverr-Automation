@@ -80,9 +80,10 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
 
             domains: dict[str, str] = {}
             phones: dict[str, str] = {}
-            emails_seen: set[str] = set()
+            emails_seen: dict[str, str] = {}
             duplicate_domain = False
             duplicate_phone = False
+            duplicate_email = False
             bad_email = False
             contradiction = False
             bad_url = False
@@ -99,6 +100,15 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
                     if p in phones:
                         duplicate_phone = True
                     phones[p] = row.get("business_name", "")
+
+                # Duplicate-email check: each individual email should appear at most once.
+                emails = (row.get("emails") or "").split(",")
+                for e in emails:
+                    e = normalize_email(e).strip()
+                    if e and e != "N/A":
+                        if e in emails_seen:
+                            duplicate_email = True
+                        emails_seen[e] = row.get("business_name", "")
 
                 ok, _ = validate_email_field(row.get("emails"))
                 if not ok:
@@ -118,6 +128,8 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
                        "duplicate normalized domains present" if duplicate_domain else "unique")
             report.add("duplicate_phones", not duplicate_phone,
                        "duplicate normalized phones present" if duplicate_phone else "unique")
+            report.add("duplicate_emails", not duplicate_email,
+                       "duplicate emails present" if duplicate_email else "unique")
             report.add("email_validity", not bad_email,
                        "invalid email values present" if bad_email else "all emails valid")
             report.add("status_consistency", not contradiction,

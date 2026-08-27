@@ -78,10 +78,12 @@ class IdentityResolver:
     def __init__(self, seen_identities: set[str] | None = None,
                  seen_domains: set[str] | None = None,
                  seen_phones: set[str] | None = None,
+                 seen_domain_city: set[str] | None = None,
                  default_country: str = "US"):
         self._identities: set[str] = set(seen_identities or set())
         self._domains: set[str] = set(seen_domains or set())
         self._phones: set[str] = set(seen_phones or set())
+        self._domain_city: set[str] = set(seen_domain_city or set())
         self._default_country = default_country
 
     def is_duplicate(self, record: dict) -> tuple[bool, str, dict]:
@@ -116,6 +118,4 @@ class IdentityResolver:
         return False, "", sig
 
     def _seen_domain_city(self) -> set[str]:
-        if not hasattr(self, "_domain_city"):
-            self._domain_city: set[str] = set()
         return self._domain_city

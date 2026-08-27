@@ -168,6 +168,48 @@ class FilterEngine:
             return False, "excluded_by_any"
         return True, ""
 
+    def split_by_enrichment(self, post_enrichment_fields: set[str]) -> "FilterEngine":
+        """Return a NEW engine holding only conditions that depend on fields
+        populated during website enrichment (emails, ga4, gtm, meta_pixel, …).
+
+        Conditions are routed by the fields they reference. A condition group
+        (include_all etc.) is split so that pre-enrichment conditions can run
+        early (before expensive enrichment) while enrichment-dependent
+        conditions run afterwards. The original engine is left unchanged.
+        """
+        post_fields = post_enrichment_fields or set()
+
+        def _depends_on_post(cond: dict) -> bool:
+            # Resolve the alias of the field to the real record key.
+            fld = _ALIASES.get(cond["field"], cond["field"])
+            return fld in post_fields
+
+        post_filters: dict = {}
+        for group in ("include_all", "include_any", "exclude_all", "exclude_any"):
+            conds = _normalize_conds(group, self._filters.get(group))
+            if not conds:
+                continue
+            post_conds = [c for c in conds if _depends_on_post(c)]
+            if post_conds:
+                post_filters[group] = post_conds
+        return FilterEngine(post_filters)
+
+
+# Fields that are always populated only after website enrichment. Filter
+# conditions referencing these must run post-enrichment, not in the early
+# (pre-enrichment) filter pass.
+POST_ENRICHMENT_FIELDS = {
+    "emails", "email_found", "email_count",
+    "ga4", "gtm", "meta_pixel", "analytics", "tag_manager", "cms",
+    "advertising", "booking_system", "chat_widget", "ssl",
+    "facebook", "instagram", "linkedin", "youtube", "twitter_x",
+    "tiktok", "pinterest", "tech_stack",
+    "website_status", "website_failure_reason",
+    "signal_pricing", "signal_financing", "signal_licensed_insured",
+    "signal_established", "signal_portfolio", "signal_mobile_service",
+    "signal_membership",
+}
+
 
 def require_website_filter(require: bool) -> FilterEngine:
     """Helper: engine that rejects records without a website when `require`."""

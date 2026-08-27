@@ -109,6 +109,10 @@ website:
   http_connect_timeout_seconds: 10
   http_read_timeout_seconds: 20
 
+  # Extra retries for transient network failures (timeouts/5xx). Each retry
+  # waits a little longer (exponential backoff). Recommended: 1.
+  http_retries: 1
+
   # Timeout for a single browser page load (seconds).
   page_navigation_timeout_seconds: 30
 
@@ -224,7 +228,7 @@ signals:
 
 
 # ---------------------------------------------------------------------------
-# FILTERS  —  keep/reject businesses BEFORE the expensive website step.
+# FILTERS  —  keep/reject businesses.
 # ---------------------------------------------------------------------------
 #  Four groups. A record must PASS include groups and NOT get caught by
 #  exclude groups to survive.
@@ -234,22 +238,27 @@ signals:
 #  exclude_all : rejected if every condition is true      (AND)
 #  exclude_any : rejected if any condition is true        (OR)
 #
+#  IMPORTANT — Filters run in two passes:
+#    1. Maps fields (website, review_count, rating, ...) run EARLY, before the
+#       expensive website step.
+#    2. Website/signal fields (ga4, gtm, meta_pixel, email_found, ...) run
+#       AFTER enrichment, because they only exist once a site is visited.
+#
 #  Useful fields: website (yes/no), reviews (review_count), rating,
 #  email_found (yes/no), meta_pixel (yes/no), ga4 (yes/no), gtm (yes/no).
-#  Comparison example:  - field: review_count
-#                          op: ">="
-#                          value: 15
+#
+#  DEFAULT IS EMPTY so your first run collects everything. After you've
+#  confirmed the collector works, add quality filters, e.g.:
+#
+#      include_all:
+#        - field: review_count
+#          op: ">="
+#          value: 10
+#        - field: rating
+#          op: ">="
+#          value: 4.0
 filters:
-  include_all:
-    - field: website
-      op: "="
-      value: "yes"
-    - field: review_count
-      op: ">="
-      value: 10
-    - field: rating
-      op: ">="
-      value: 4.0
+  include_all: []
   # include_any: []
   # exclude_any: []
 

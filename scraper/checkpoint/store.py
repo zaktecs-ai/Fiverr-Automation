@@ -45,8 +45,9 @@ CREATE TABLE IF NOT EXISTS records (
     place_id TEXT,
     canonical_domain TEXT,
     normalized_phone TEXT,
+    city TEXT,
     source_query TEXT,
-    stage TEXT NOT NULL DEFAULT 'discovered', -- discovered|filtered|enriched|validated|committed
+    stage TEXT NOT NULL DEFAULT 'discovered', -- discovered|accepted|filtered|rejected|committed
     raw_json TEXT,
     committed_row INTEGER,
     updated_at REAL
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE INDEX IF NOT EXISTS idx_records_identity ON records(identity_key);
 CREATE INDEX IF NOT EXISTS idx_records_domain ON records(canonical_domain);
 CREATE INDEX IF NOT EXISTS idx_records_phone ON records(normalized_phone);
+CREATE INDEX IF NOT EXISTS idx_records_city ON records(city);
 CREATE TABLE IF NOT EXISTS counters (
     name TEXT PRIMARY KEY,
     value INTEGER NOT NULL DEFAULT 0
@@ -75,23 +77,44 @@ class CheckpointStore:
         self._json_path = self.path.with_suffix(".json")
         self._backup_path = self.path.with_name(self.path.name + ".backup.json")
         self._loaded_ids: set[str] = set()
+        self._migrate()
         self._load_existing()
+
+    # ------------------------------------------------------------------
+    # Schema migration (additive only; safe on existing DBs)
+    # ------------------------------------------------------------------
+    def _migrate(self) -> None:
+        try:
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(records)").fetchall()}
+            if "city" not in cols:
+                with self._conn:
+                    self._conn.execute("ALTER TABLE records ADD COLUMN city TEXT")
+        except Exception as e:
+            log.debug("migration skipped: %s", e)
 
     # ------------------------------------------------------------------
     # Identity / dedup preload
     # ------------------------------------------------------------------
     def _load_existing(self) -> None:
-        """Populate the in-memory set of already-seen identities/domains/phones.
+        """Populate in-memory seen sets from COMMITTED records only.
 
-        Bounded: we keep only identity keys (short strings) in memory, not raw rows.
+        In-flight records (discovered/accepted) are intentionally excluded so a
+        crash mid-enrichment does not make a not-yet-committed record look like
+        a duplicate on restart and get skipped forever.
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT identity_key, canonical_domain, normalized_phone FROM records"
+                "SELECT identity_key, canonical_domain, normalized_phone, city "
+                "FROM records WHERE stage='committed'"
             ).fetchall()
         self._identities: set[str] = {r["identity_key"] for r in rows if r["identity_key"]}
         self._domains: set[str] = {r["canonical_domain"] for r in rows if r["canonical_domain"]}
         self._phones: set[str] = {r["normalized_phone"] for r in rows if r["normalized_phone"]}
+        # domain+city combos for multi-location dedup.
+        self._domain_city: set[str] = {
+            f"{r['canonical_domain']}|{r['city'].lower()}"
+            for r in rows if r["canonical_domain"] and r["city"]
+        }
 
     def has_identity(self, key: str) -> bool:
         return key in self._identities
@@ -103,24 +126,33 @@ class CheckpointStore:
         return bool(p) and p in self._phones
 
     def register_record(self, record_id: str, identity_key: str, place_id: str,
-                        canonical_domain: str, normalized_phone: str,
+                        canonical_domain: str, normalized_phone: str, city: str,
                         source_query: str, raw_json: str) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO records "
                 "(record_id, identity_key, place_id, canonical_domain, normalized_phone, "
-                " source_query, stage, raw_json, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                " city, source_query, stage, raw_json, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (record_id, identity_key, place_id, canonical_domain, normalized_phone,
-                 source_query, "discovered", raw_json, time.time()),
+                 city, source_query, "discovered", raw_json, time.time()),
             )
             self._conn.commit()
+        # NOTE: seen sets are only loaded from committed records on startup;
+        # do NOT mutate them for in-flight records here (prevents the crash-time
+        # "unfinished record looks like a duplicate" bug).
         if identity_key:
             self._identities.add(identity_key)
         if canonical_domain:
             self._domains.add(canonical_domain)
         if normalized_phone:
             self._phones.add(normalized_phone)
+
+    def _stage(self, record_id: str) -> str:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT stage FROM records WHERE record_id=?", (record_id,)).fetchone()
+        return row["stage"] if row else ""
 
     def set_stage(self, record_id: str, stage: str) -> None:
         with self._lock:
@@ -195,7 +227,11 @@ class CheckpointStore:
     # JSON mirror + backup (for human inspection)
     # ------------------------------------------------------------------
     def write_json_mirror(self) -> None:
-        """Write a human-readable summary; atomic via temp file + rename."""
+        """Write a human-readable summary; atomic via temp file + rename.
+
+        The backup holds the PREVIOUS mirror: rotate before replacing, so
+        `.backup.json` is genuinely the prior state (not a copy of the new one).
+        """
         snapshot = {
             "checkpoint_path": str(self.path),
             "updated_at": time.time(),
@@ -203,13 +239,16 @@ class CheckpointStore:
             "counters": self.counters(),
             "committed_records": self.committed_count(),
         }
+        # Rotate: current -> backup (before writing the new current).
+        if self._json_path.exists():
+            try:
+                self._backup_path.write_text(self._json_path.read_text(encoding="utf-8"),
+                                             encoding="utf-8")
+            except Exception:
+                pass
         tmp = self._json_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
         tmp.replace(self._json_path)
-        # Maintain a single backup copy of the prior mirror.
-        if self._json_path.exists():
-            self._backup_path.write_text(self._json_path.read_text(encoding="utf-8"),
-                                         encoding="utf-8")
 
     def _query_rows(self) -> list[dict]:
         with self._lock:
@@ -220,7 +259,6 @@ class CheckpointStore:
         """Create a durable copy of the SQLite file (best-effort)."""
         try:
             with self._lock:
-                src = self._conn.execute("PRAGMA database_list").fetchone()
                 self._conn.execute("PRAGMA wal_checkpoint(FULL)")
             import shutil
             shutil.copy2(str(self.path), str(self.path) + ".sqlite.bak")

@@ -162,6 +162,10 @@ analysed and its **field-tested patterns** ported into this engine:
   `button.DkEaL`, address `button[data-item-id="address"]`, phone
   `button[data-item-id^="phone:tel:"]`, website `a[data-item-id="authority"]`,
   claimed via `merchant_claim_business`, plus the feed `div[role="feed"]`.
+  All re-verified live against Google Maps on 2026-08-28; business hours are
+  read from the hours table (`table.eK4R0e` rows carrying a
+  `Copy open hours` aria-label) and open/closed status from `span.ZDu9vd`,
+  since the older `div[class*="hours"]` selector no longer matches.
 - **Rating/reviews regex** (`([1-5]\.\d)`, `\(([\d,]+)\)`, `(\d+) reviews`)
   used as a semantic fallback alongside the grandparent-header trick.
 - **Address decomposition** into city/state/zip via `\b\d{5}\b`,
@@ -175,6 +179,28 @@ Its weaknesses were explicitly **not** ported: the false-"dead" classification
 on any request exception (including timeouts), the verboten "Lead Score"
 column, the fragile CSV-based dedup, query-only JSON checkpoints, bare
 `except: pass`, hardcoded city/niche lists, and `verify=False` SSL bypass.
+
+## Reliability guarantees (post-audit)
+
+A third-party audit (Claude + ChatGPT bug reports) surfaced several
+seam-level defects. All were fixed:
+
+- **Zero-listings fail-closed**: a non-empty Maps search returning 0 links now
+  raises `ZeroListingsError`; the pipeline marks the query `failed` (never
+  `done`) so it is retried on the next run, instead of silently succeeding.
+- **Checkpoint resume correctness**: dedup seen-sets are seeded from
+  `committed` records only, so a crash mid-enrichment no longer makes an
+  unfinished record look like a duplicate and vanish forever.
+- **Crawler `len(int)` TypeError** fixed.
+- **Filter ordering**: conditions split into a pre-enrichment pass (Maps
+  fields) and a post-enrichment pass (ga4/gtm/emails/signals), so signal-based
+  filters actually work.
+- **`ga4`/`gtm` added to `OUTPUT_COLUMNS`** (they were computed then silently
+  dropped at export).
+- Randomized delays, HTTP/SMTP retry wiring, browser recycling (`mark_query`),
+  Playwright missing-binary error handling, MX priority sorting, duplicate-email
+  quality check, signal-evidence retention, and correct checkpoint backup
+  rotation.
 
 ## Assumptions made
 

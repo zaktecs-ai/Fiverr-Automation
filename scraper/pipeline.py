@@ -22,7 +22,8 @@ from .checkpoint import CheckpointStore
 from .dedup import IdentityResolver, resolve_identity
 from .email import MXChecker, SMTPVerifier
 from .export import AtomicCSVWriter, RunSummary, write_xlsx
-from .filters import FilterEngine, require_website_filter
+from .filters import FilterEngine, POST_ENRICHMENT_FIELDS, require_website_filter
+from .maps.collector import ZeroListingsError
 from .models import OUTPUT_COLUMNS, BusinessRecord, WebsiteStatus
 from .utils.normalize import (
     canonical_domain, normalize_email, normalize_phone, normalize_text, normalize_url,
@@ -57,17 +58,22 @@ class Pipeline:
 
         self.csv = AtomicCSVWriter(self.csv_path, OUTPUT_COLUMNS)
 
-        # Dedup seeded from checkpoint.
+        # Dedup seeded from checkpoint (COMMITTED records only).
         self.resolver = IdentityResolver(
             seen_identities=self.store._identities,
             seen_domains=self.store._domains,
             seen_phones=self.store._phones,
+            seen_domain_city=self.store._domain_city,
             default_country=cfg.get("country", {}).get("default", "US"),
         )
 
         # Filters (maps + website-inclusion).
         base_filters = FilterEngine(cfg.get("filters"))
         self.filters = base_filters
+        # Pre-enrichment pass: only conditions on Maps-populated fields.
+        # Enrichment-dependent conditions (ga4/gtm/emails/signals) run later.
+        self.pre_filters = FilterEngine(self._pre_filter_dict(base_filters))
+        self.post_filters = base_filters.split_by_enrichment(POST_ENRICHMENT_FIELDS)
         self.require_web = require_website_filter(
             cfg.get("website", {}).get("require_website", False))
 
@@ -78,8 +84,14 @@ class Pipeline:
 
         # Email verification (optional).
         email_cfg = cfg.get("email", {})
-        self.mx = MXChecker(enabled=email_cfg.get("enable_mx_check", False))
-        self.smtp = SMTPVerifier(enabled=cfg.get("smtp", {}).get("enabled", False))
+        smtp_cfg = cfg.get("smtp", {})
+        self.mx = MXChecker(enabled=email_cfg.get("enable_mx_check", False),
+                            timeout=email_cfg.get("mx_timeout_seconds", 5.0))
+        self.smtp = SMTPVerifier(
+            enabled=smtp_cfg.get("enabled", False),
+            timeout=smtp_cfg.get("verification_timeout_seconds", 20),
+            retries=smtp_cfg.get("retries", 1),
+        )
 
         self.summary = RunSummary()
         self._query_keys: dict[str, str] = {}
@@ -116,46 +128,104 @@ class Pipeline:
         self.store.set_query_status(query, "running")
 
         records = []
-        for raw in self.maps.collect(query):
-            self.summary.bump("businesses_discovered")
-            rec = self._normalize_maps(raw)
-            # Early dedup.
-            is_dup, reason, sig = self.resolver.is_duplicate(rec.data)
-            if is_dup:
-                self.summary.bump("duplicates_removed")
-                log.info("duplicate removed (%s): %s", reason, rec.data.get("business_name"))
-                continue
+        try:
+            for raw in self.maps.collect(query):
+                self.summary.bump("businesses_discovered")
+                rec = self._normalize_maps(raw)
+                # Early dedup.
+                is_dup, reason, sig = self.resolver.is_duplicate(rec.data)
+                if is_dup:
+                    self.summary.bump("duplicates_removed")
+                    log.info("duplicate removed (%s): %s",
+                             reason, rec.data.get("business_name"))
+                    continue
 
-            rec_id = str(uuid.uuid4())
-            rec.set("record_id", rec_id)
-            self.store.register_record(
-                rec_id, sig.get("identity_key", ""), sig.get("place_id") or "",
-                sig.get("canonical_domain") or "", sig.get("normalized_phone") or "",
-                query, self._json_dump(rec.data))
+                rec_id = str(uuid.uuid4())
+                rec.set("record_id", rec_id)
+                self.store.register_record(
+                    rec_id, sig.get("identity_key", ""), sig.get("place_id") or "",
+                    sig.get("canonical_domain") or "", sig.get("normalized_phone") or "",
+                    sig.get("city") or "", query, self._json_dump(rec.data))
 
-            # Early filter (before expensive enrichment).
-            ok, freason = self.filters.evaluate(rec.data)
-            if not ok or not self.require_web_ok(rec.data):
-                if not ok:
-                    reason_text = freason or "filtered"
-                else:
-                    reason_text = "website_missing"
-                rec.set("filtered_out_reason", reason_text)
-                self.store.set_stage(rec_id, "filtered")
-                self._append_row(self.filtered_path, rec.data)
-                self.summary.bump("filtered_out")
-                continue
+                # Pre-enrichment filter: Maps-populated fields only.
+                ok, freason = self.pre_filters.evaluate(rec.data)
+                if not ok or not self.require_web_ok(rec.data):
+                    if not ok:
+                        reason_text = freason or "filtered"
+                    else:
+                        reason_text = "website_missing"
+                    rec.set("filtered_out_reason", reason_text)
+                    self.store.set_stage(rec_id, "filtered")
+                    self._append_row(self.filtered_path, rec.data)
+                    self.summary.bump("filtered_out")
+                    continue
 
-            self.store.set_stage(rec_id, "accepted")
-            records.append(rec)
+                self.store.set_stage(rec_id, "accepted")
+                records.append(rec)
+        except ZeroListingsError as e:
+            # Non-empty search yielded zero links: leave query `failed` so it is
+            # retried on the next run, not silently marked done.
+            log.error("query failed (collector extracted 0 listings): %s", e)
+            self.store.set_query_status(query, "failed")
+            self.summary.bump("queries_failed", 1)
+            self.store.write_json_mirror()
+            self._recycle_browser_if_needed(query)
+            return
 
         # Enrich accepted records (bounded website workers).
         self._enrich_records(records)
+
+        # Post-enrichment filter: enrichment-populated fields (ga4/gtm/emails/…).
+        self._apply_post_filters(records)
 
         # Mark query done.
         self.store.set_query_status(query, "done")
         self.summary.bump("completed_queries")
         self.store.write_json_mirror()
+        self._recycle_browser_if_needed(query)
+
+    def _apply_post_filters(self, records: list[BusinessRecord]) -> None:
+        """Re-check enrichment-dependent filters; reject records that fail."""
+        if not self.post_filters._filters:
+            return
+        for rec in records:
+            if rec.get("record_id") and self.store._stage(rec.get("record_id")) == "committed":
+                continue
+            ok, freason = self.post_filters.evaluate(rec.data)
+            if not ok:
+                rec.set("filtered_out_reason", freason or "post_filtered")
+                self.store.set_stage(rec.get("record_id"), "filtered")
+                self._append_row(self.filtered_path, rec.data)
+                self.summary.bump("filtered_out")
+
+    def _recycle_browser_if_needed(self, query: str) -> None:
+        if self._bm is not None:
+            try:
+                self._bm.mark_query()
+                self._bm.recycle()
+            except Exception as e:  # noqa: BLE001
+                log.debug("browser recycle skipped: %s", e)
+
+    def _pre_filter_dict(self, base: FilterEngine) -> dict:
+        """Return filters containing only conditions that do NOT depend on
+        enrichment-populated fields (so they can run before the expensive
+        website step)."""
+        from .filters.engine import _normalize_conds, _ALIASES
+        post = POST_ENRICHMENT_FIELDS
+        out: dict = {}
+        for group in ("include_all", "include_any", "exclude_all", "exclude_any"):
+            conds = _normalize_conds(group, base._filters.get(group))
+            kept = []
+            for c in conds:
+                fld = _ALIASES.get(c["field"], c["field"])
+                fld_real = {"website": "website", "review_count": "review_count",
+                            "rating": "rating", "email_found": "emails"}.get(
+                                c["field"], fld)
+                if fld_real not in post and c["field"] != "email_found":
+                    kept.append(c)
+            if kept:
+                out[group] = kept
+        return out
 
     def require_web_ok(self, data: dict) -> bool:
         ok, reason = self.require_web.evaluate(data)
@@ -246,10 +316,16 @@ class Pipeline:
         return rich
 
     def _finalize_record(self, rec: BusinessRecord, rich: dict | None) -> None:
+        evidence = {}
         if rich:
             evidence = rich.pop("_evidence", {})
             for k, v in rich.items():
                 rec.set(k, v)
+        # Retain signal evidence for auditability (logged, not in CSV).
+        if evidence:
+            rec.evidence = evidence
+            log.debug("signals for %s: %s",
+                      rec.data.get("business_name"), ",".join(evidence))
         # Email verification (optional).
         self._apply_email_verification(rec)
 

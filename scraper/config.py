@@ -91,8 +91,10 @@ def load_config(path: str | Path = "config.yaml") -> dict:
 # Validation helpers
 # ---------------------------------------------------------------------------
 
-def _int_in(cfg: dict, key: str, lo: int, hi: int, recommend: str) -> None:
+def _int_in(cfg: dict, key: str, lo: int, hi: int, recommend: str, optional: bool = False) -> None:
     val = cfg.get(key)
+    if optional and val is None:
+        return
     if not isinstance(val, int) or isinstance(val, bool):
         raise ConfigError(f"ERROR: {key} must be an integer between {lo} and {hi}.\n"
                           f"Current value: {val!r}\nRecommended for 12 GB VPS: {recommend}")
@@ -131,9 +133,9 @@ def _list_of_str(cfg: dict, key: str, allow_empty: bool = False) -> None:
 def validate_config(cfg: dict) -> None:
     errors: list[str] = []
 
-    def check(fn, *args):
+    def check(fn, *args, **kwargs):
         try:
-            fn(*args)
+            fn(*args, **kwargs)
         except ConfigError as e:
             errors.append(str(e))
 
@@ -155,7 +157,6 @@ def validate_config(cfg: dict) -> None:
     concurrency = cfg.get("concurrency", {})
     signals = cfg.get("signals", {})
     filters = cfg.get("filters", {})
-    limits = cfg.get("limits", {})
 
     check(_int_in, job, "max_results_per_query", 0, 100_000, "200-1000")
     check(_int_in, job, "max_total_results", 0, 1_000_000, "2000-20000")
@@ -172,6 +173,7 @@ def validate_config(cfg: dict) -> None:
 
     check(_int_in, website, "max_pages_per_site", 1, 50, "5-10")
     check(_int_in, website, "overall_site_timeout_seconds", 5, 600, "90-120")
+    check(_int_in, website, "http_retries", 0, 10, "1", optional=True)
     check(_bool, website, "require_website")
     check(_bool, website, "enable_playwright_fallback")
     check(_bool, website, "enable_sitemap")

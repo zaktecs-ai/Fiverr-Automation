@@ -30,6 +30,23 @@ log = logging.getLogger(__name__)
 MAPS_SEARCH_URL = "https://www.google.com/maps/search/{query}"
 
 
+class ZeroListingsError(RuntimeError):
+    """Raised when a non-empty Maps search returns zero listing URLs.
+
+    Signals a collector/extraction failure (selector drift, interstitial,
+    bot challenge) as opposed to a genuinely empty query. The pipeline catches
+    this and marks the query `failed` rather than `done`.
+    """
+
+    def __init__(self, query: str):
+        super().__init__(
+            f"0 listing URLs extracted for query '{query}' — likely selector "
+            f"drift or an interstitial (not 'no results'). Query left un-done "
+            f"so it can be retried."
+        )
+        self.query = query
+
+
 def _with_region(url: str, hl: str, gl: str) -> str:
     """Append hl/gl (language/region) params to a Maps URL.
 
@@ -56,10 +73,16 @@ ADDRESS_SELECTORS = ['button[data-item-id="address"]', 'div[class*="address"]']
 PHONE_SELECTORS = ['button[data-item-id^="phone:tel:"]', 'button[data-item-id^="phone"]']
 WEBSITE_SELECTORS = ['a[data-item-id="authority"]', 'a[aria-label*="Website"]']
 CLAIM_SELECTOR = 'a[data-item-id="merchant_claim_business"]'
-HOURS_SELECTORS = ['div[class*="hours"]', 'tr[class*="hours"]',
-                   'button[data-item-id="oh"]', 'div[aria-label*="hours"]']
+# Live-verified (2026-08): hours live in a table (class eK4R0e) whose rows are
+# buttons carrying an aria-label like "Monday, 10 AM to 6 PM, Copy open hours".
+HOURS_TABLE_SELECTORS = ['table.eK4R0e', 'table[class*="hours"]']
+HOURS_ROW_SELECTOR = 'button[aria-label*="Copy open hours"]'
+# Open/Closed status span (live-verified) + aria fallback.
+STATUS_SELECTORS = ['span.ZDu9vd', 'div.o0Svhf span',
+                    '[aria-label="Open"], [aria-label="Closed"]']
 DESCRIPTION_SELECTORS = ['div[class*="fontBodyMedium"]',
-                         'div[data-item-id="editorial_summary"]']
+                         'div[data-item-id="editorial_summary"]',
+                         'div.PYvSYb']
 
 
 def parse_google_maps_url(url: str) -> dict:
@@ -191,7 +214,7 @@ def _open_business_page(ctx, place_url: str, hl: str = "en", gl: str = "us") -> 
         data["phone"] = _first(page, PHONE_SELECTORS)
         data["website"] = _first_attr(page, WEBSITE_SELECTORS[0], "href") or \
             _first_attr(page, WEBSITE_SELECTORS[1], "href")
-        data["business_hours"] = _first(page, HOURS_SELECTORS)
+        data["business_hours"] = _extract_hours(page)
         data["business_description"] = _first(page, DESCRIPTION_SELECTORS)
 
         # Rating / reviews: legacy-proven grandparent header trick + text fallback.
@@ -246,7 +269,55 @@ def _business_status(page) -> str:
             return "Permanently closed"
     except Exception:
         pass
+    for sel in STATUS_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                txt = loc.inner_text(timeout=1500).strip()
+                if txt:
+                    # Status reads like "Closed · Opens 10 AM Fri".
+                    if txt.lower().startswith("open"):
+                        return "Open"
+                    if txt.lower().startswith("closed"):
+                        return "Closed"
+                    return txt.split("·")[0].strip()
+        except Exception:
+            continue
     return "Open"
+
+
+def _extract_hours(page) -> str:
+    """Extract business hours as one human-readable string.
+
+    Live-verified format: a table (class eK4R0e) whose rows are buttons with
+    aria-label "Monday, 10 AM to 6 PM, Copy open hours". Falls back to the raw
+    table text if the row buttons are absent, then to 'N/A'.
+    """
+    try:
+        rows = page.locator(HOURS_ROW_SELECTOR)
+        if rows.count() > 0:
+            labels = []
+            for i in range(rows.count()):
+                aria = rows.nth(i).get_attribute("aria-label", timeout=1500) or ""
+                # "Monday, 10 AM to 6 PM, Copy open hours" -> "Monday: 10 AM to 6 PM"
+                label = aria.split(", Copy open hours")[0]
+                label = re.sub(r",\s*(?=\d)", ": ", label, count=1)
+                labels.append(label)
+            if labels:
+                return "; ".join(labels)
+    except Exception:
+        pass
+    # Fallback: raw table text.
+    for sel in HOURS_TABLE_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                txt = loc.inner_text(timeout=1500).strip()
+                if txt:
+                    return txt
+        except Exception:
+            continue
+    return "N/A"
 
 
 def _first(page, selectors: list[str]) -> str | None:
@@ -317,6 +388,13 @@ class MapsCollector:
             listing_links = self._extract_listing_links(page)
             log.info("query '%s': found %d listing place URLs", query, len(listing_links))
 
+            # Fail-closed: a non-empty search that yields 0 listing links means
+            # the collector is broken (selector drift / interstitial), NOT that
+            # the query genuinely has no results. Raise so the pipeline records
+            # the query as `failed` instead of silently marking it `done`.
+            if not listing_links:
+                raise ZeroListingsError(query)
+
             for place_url in listing_links:
                 if self._max_total and self._yielded_total >= self._max_total:
                     break
@@ -349,11 +427,29 @@ class MapsCollector:
         return data
 
     def _scroll_results(self, page) -> None:
-        """Scroll the results feed a bounded number of times to load listings."""
+        """Scroll the results feed (div[role="feed"]) to load more listings.
+
+        Targets the feed element itself (live-verified); falls back to global
+        mouse wheel if the feed locator is missing.
+        """
+        feed = None
+        try:
+            loc = page.locator('div[role="feed"]')
+            if loc.count() > 0:
+                feed = loc.first
+        except Exception:
+            feed = None
+
         for _ in range(12):
-            page.mouse.wheel(0, 1200)
+            try:
+                if feed is not None:
+                    feed.evaluate("el => el.scrollTo(0, el.scrollHeight)")
+                else:
+                    page.mouse.wheel(0, 1200)
+            except Exception:
+                page.mouse.wheel(0, 1200)
             lo, hi = self._scroll_delay
-            time.sleep((lo + hi) / 2 / 1000.0)
+            time.sleep(random.uniform(lo, hi) / 1000.0)
             if self._has_no_more_results(page):
                 break
 
@@ -381,4 +477,4 @@ class MapsCollector:
     def _small_pause(self) -> None:
         """A small randomized pause between records to keep pacing gentle."""
         lo, hi = self._scroll_delay
-        time.sleep((lo + hi) / 2 / 1000.0)
+        time.sleep(random.uniform(lo, hi) / 1000.0)

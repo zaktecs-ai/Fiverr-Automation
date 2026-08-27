@@ -10,13 +10,28 @@ class TestCheckpointStore:
     def test_register_and_commit(self, tmp_path):
         s = CheckpointStore(tmp_path / "ck.db")
         s.register_record("id1", "key1", "pid1", "example.com", "12145551234",
-                          "q1", '{"a":1}')
-        assert s.has_identity("key1")
-        assert s.has_domain("example.com")
-        assert s.has_phone("12145551234")
+                          "Dallas", "q1", '{"a":1}')
         s.set_stage("id1", "accepted")
         s.mark_committed("id1", 0)
         assert s.committed_count() == 1
+        # Seen sets load committed records only.
+        assert s.has_identity("key1")
+        assert s.has_domain("example.com")
+        assert s.has_phone("12145551234")
+
+    def test_in_flight_record_not_treated_as_duplicate_on_reload(self, tmp_path):
+        """A record that crashed before commit must NOT reseed dedup sets."""
+        path = tmp_path / "ck.db"
+        s1 = CheckpointStore(path)
+        s1.register_record("id1", "key1", "pid1", "example.com", "12145551234",
+                           "Dallas", "q1", "{}")
+        # stage stays 'discovered' (crash before commit)
+        s1.close()
+
+        s2 = CheckpointStore(path)  # simulate restart
+        assert s2.has_identity("key1") is False
+        assert s2.has_domain("example.com") is False
+        assert s2.has_phone("12145551234") is False
 
     def test_query_status_lifecycle(self, tmp_path):
         s = CheckpointStore(tmp_path / "ck.db")
@@ -26,11 +41,13 @@ class TestCheckpointStore:
         s.set_query_status("q1", "done")
         assert s.remaining_queries(["q1", "q2"]) == ["q2"]
 
-    def test_resume_reloads_seen_sets(self, tmp_path):
+    def test_resume_reloads_seen_sets_committed_only(self, tmp_path):
         path = tmp_path / "ck.db"
         s1 = CheckpointStore(path)
         s1.register_record("id1", "key1", "pid1", "example.com", "12145551234",
-                           "q1", "{}")
+                           "Dallas", "q1", "{}")
+        s1.set_stage("id1", "accepted")
+        s1.mark_committed("id1", 0)
         s1.close()
 
         s2 = CheckpointStore(path)  # re-open simulates restart

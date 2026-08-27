@@ -47,7 +47,21 @@ class BrowserManager:
         launch_kwargs = {"headless": self._headless}
         if self._proxy:
             launch_kwargs["proxy"] = self._proxy
-        self._browser = self._pw.chromium.launch(**launch_kwargs)
+        try:
+            self._browser = self._pw.chromium.launch(**launch_kwargs)
+        except Exception as e:  # pragma: no cover - env dependent (missing binary)
+            # The far more common failure than a missing package: the package is
+            # installed but the Chromium binary was never downloaded.
+            msg = str(e).lower()
+            if "executable doesn't exist" in msg or "playwright install" in msg or \
+                    "browser" in msg and "not found" in msg:
+                self._pw.stop()
+                self._pw = None
+                raise RuntimeError(
+                    "Chromium browser binary is missing. Run "
+                    "`python -m playwright install chromium` (or re-run ./setup.sh)."
+                ) from e
+            raise
         log.info("browser launched (headless=%s)", self._headless)
         return self._browser
 

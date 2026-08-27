@@ -76,10 +76,11 @@ class SMTPVerifier:
     """Direct SMTP verification with explicit, non-guaranteed statuses."""
 
     def __init__(self, enabled: bool = False, timeout: float = 15.0,
-                 from_email: str = "verify@example.com"):
+                 from_email: str = "verify@example.com", retries: int = 1):
         self.enabled = enabled
         self.timeout = timeout
         self.from_email = from_email
+        self.retries = retries
         self._mx_cache: dict[str, tuple[str, str]] = {}
 
     def verify(self, email: str, mx: tuple[str, str] | None = None) -> tuple[str, str]:
@@ -98,8 +99,22 @@ class SMTPVerifier:
         if not hosts:
             return "Invalid", "no_mx_hosts"
 
+        # Retry transient/inconclusive outcomes up to `retries` extra times.
         last_status = "Inconclusive"
         last_reason = "unreachable"
+        for attempt in range(self.retries + 1):
+            outcome = self._try_hosts(hosts, email)
+            status, reason = outcome
+            if status in ("Verified", "Invalid"):
+                return status, reason
+            last_status, last_reason = status, reason
+            if attempt < self.retries:
+                log.retry("smtp %s inconclusive (%s), retry %d/%d",
+                          email, status, attempt + 1, self.retries)
+        return last_status, last_reason
+
+    def _try_hosts(self, hosts: list[str], email: str) -> tuple[str, str]:
+        last_status, last_reason = "Inconclusive", "unreachable"
         for host in hosts:
             try:
                 status, reason = self._smtp_transaction(host, email)
@@ -125,8 +140,9 @@ class SMTPVerifier:
             try:
                 import dns.resolver
                 answers = dns.resolver.resolve(domain, "MX", lifetime=5.0)
-                return sorted([str(r.exchange).rstrip(".") for r in answers],
-                              key=lambda h: 0)
+                # Sort by MX preference (lower = higher priority), then exchange.
+                return [str(r.exchange).rstrip(".") for r in
+                        sorted(answers, key=lambda r: (r.preference, str(r.exchange)))]
             except Exception:
                 return []
         return []

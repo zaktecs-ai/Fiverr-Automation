@@ -27,8 +27,8 @@ OUTPUT_COLUMNS: list[str] = [
     "tiktok", "pinterest",
     "tech_stack",
     # Technologies / signals (individual)
-    "cms", "analytics", "tag_manager", "meta_pixel", "advertising",
-    "booking_system", "chat_widget", "ssl",
+    "cms", "analytics", "tag_manager", "meta_pixel", "ga4", "gtm",
+    "advertising", "booking_system", "chat_widget", "ssl",
     # Signals
     "signal_pricing", "signal_financing", "signal_licensed_insured",
     "signal_established", "signal_portfolio", "signal_mobile_service",

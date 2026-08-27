@@ -66,7 +66,7 @@ class SmartCrawler:
         queue: list[str] = self._build_queue(base_url, fetch_fn)
         visited: set[str] = set()
 
-        while queue and len(result.pages_crawled) < self._max_pages:
+        while queue and result.pages_crawled < self._max_pages:
             if _t.monotonic() - start > self._overall_timeout:
                 result.stopped_reason = "timeout"
                 break
@@ -96,7 +96,7 @@ class SmartCrawler:
                 result.headers = getattr(fr, "headers", {}) or {}
 
             # Discover internal links to add to the queue.
-            if len(result.pages_crawled) < self._max_pages:
+            if result.pages_crawled < self._max_pages:
                 for link in self._discover_links(html, origin):
                     if link not in visited and link not in queue:
                         queue.append(link)

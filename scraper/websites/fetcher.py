@@ -71,17 +71,38 @@ def classify_html_block(html: str) -> str | None:
 
 class WebsiteFetcher:
     def __init__(self, *, connect_timeout: float = 10.0, read_timeout: float = 20.0,
-                 proxy: httpx.Proxy | None = None, max_redirects: int = 5):
+                 proxy: httpx.Proxy | None = None, max_redirects: int = 5,
+                 retries: int = 1, retry_base_delay: float = 1.0):
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._proxy = proxy
         self._max_redirects = max_redirects
+        self._retries = retries
+        self._retry_base_delay = retry_base_delay
 
     def fetch(self, url: str) -> FetchResult:
         url = normalize_url(url)
         if url == "N/A":
             return FetchResult(url=url, website_status=WebsiteStatus.LIVE,
                                failure_reason=FailureReason.UNKNOWN)
+        # Retry transient timeouts/network errors before accepting a final result.
+        for attempt in range(self._retries + 1):
+            result = self._fetch_once(url)
+            if result.ok or attempt >= self._retries:
+                return result
+            if result.failure_reason in (FailureReason.TIMEOUT,
+                                         FailureReason.UNREACHABLE,
+                                         FailureReason.UNKNOWN):
+                log.retry("fetch %s transient (%s), retry %d/%d",
+                          url, result.failure_reason, attempt + 1, self._retries)
+                import time as _t
+                _t.sleep(self._retry_base_delay * (2 ** attempt))
+            else:
+                # Non-transient (403/404/DNS dead, block, captcha): don't retry.
+                return result
+        return result
+
+    def _fetch_once(self, url: str) -> FetchResult:
         follow = {"max_redirects": self._max_redirects} if self._max_redirects > 0 else {}
         result = FetchResult(url=url, final_url=url)
         try:

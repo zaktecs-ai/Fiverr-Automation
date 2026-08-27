@@ -64,6 +64,7 @@ class WebsiteEnricher:
         self._fetcher = fetcher or WebsiteFetcher(
             connect_timeout=site.get("http_connect_timeout_seconds", 10.0),
             read_timeout=site.get("http_read_timeout_seconds", 20.0),
+            retries=site.get("http_retries", 1),
         )
         self._tech = tech or TechDetector(use_wappalyzer=site.get("use_wappalyzer", True))
         self._signals = signals or SignalDetector(cfg.get("signals", {}))
@@ -152,9 +153,6 @@ class WebsiteEnricher:
             out["website_failure_reason"] = ""
         return out
 
-    def _last_headers(self, result) -> dict:
-        return getattr(result, "headers", {}) or {}
-
     def _playwright_fetch(self, url: str) -> FetchResult:
         """Escalate to Playwright for a JS-required/blocked page."""
         try:
@@ -182,13 +180,6 @@ class WebsiteEnricher:
             log.debug("playwright fallback failed %s: %s", url, e)
             return FetchResult(url=url, website_status="LIVE",
                                failure_reason=FailureReason.JS_REQUIRED)
-
-    def _last_headers(self, result) -> dict:
-        # The crawler stores FetchResult mapping in html_by_url but we only keep
-        # text/urls here; headers are re-derived from the fetcher in enrich() via
-        # a lightweight field. To avoid over-engineering, return {} unless we
-        # capture them. (Tech detection falls back to regex, which is fine.)
-        return getattr(result, "headers", {}) or {}
 
     def _extract_scripts(self, html: str) -> list[str]:
         return re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html or "")

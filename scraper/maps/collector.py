@@ -34,17 +34,76 @@ class ZeroListingsError(RuntimeError):
     """Raised when a non-empty Maps search returns zero listing URLs.
 
     Signals a collector/extraction failure (selector drift, interstitial,
-    bot challenge) as opposed to a genuinely empty query. The pipeline catches
-    this and marks the query `failed` rather than `done`.
+    bot challenge, consent wall) as opposed to a genuinely empty query. The
+    pipeline catches this and marks the query `failed` rather than `done`.
     """
 
-    def __init__(self, query: str):
-        super().__init__(
-            f"0 listing URLs extracted for query '{query}' — likely selector "
-            f"drift or an interstitial (not 'no results'). Query left un-done "
-            f"so it can be retried."
-        )
+    def __init__(self, query: str, diagnostic: str = ""):
         self.query = query
+        self.diagnostic = diagnostic
+        detail = f" — diagnostic: {diagnostic}" if diagnostic else ""
+        super().__init__(
+            f"0 listing URLs extracted for query '{query}'{detail} — likely "
+            f"consent wall / selector drift / interstitial (not 'no results'). "
+            f"Query left un-done so it can be retried."
+        )
+
+
+# EU GDPR consent-wall markers + the buttons that dismiss them. On a German (or
+# any EU) IP, Google's first visit shows a consent screen ("Accept all" /
+# "Alle akzeptieren") that hides the results feed until dismissed.
+_CONSENT_MARKERS = [
+    "consent.google", "before you continue", "accept all", "alle akzeptieren",
+    "zustimmen", "i agree", "wtm", "reject all",
+]
+_CONSENT_BUTTON_SELECTORS = [
+    'button:has-text("Accept all")',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Zustimmen")',
+    'button:has-text("I agree")',
+    'form[action*="consent"] button',
+    'div[role="dialog"] button:has-text("Accept")',
+    'div[role="none"] button:has-text("Accept")',
+    # Google consent form (EU): accept-all button by aria/name
+    'button[aria-label*="Accept all"]',
+    'form[action*="ConsentRedirect"] button[jsname]',
+]
+
+
+def handle_consent_wall(page) -> bool:
+    """Dismiss the EU consent screen if present. Returns True if it acted."""
+    try:
+        content = page.content()
+    except Exception:
+        return False
+    low = content.lower()
+    if not any(m in low for m in _CONSENT_MARKERS):
+        return False
+    for sel in _CONSENT_BUTTON_SELECTORS:
+        try:
+            btn = page.locator(sel).first
+            if btn.count() > 0 and btn.is_visible():
+                btn.click(timeout=3000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _page_diagnostic(page) -> str:
+    """Capture a short, safe diagnostic snippet of the current page for logs."""
+    try:
+        text = page.inner_text("body") or ""
+    except Exception:
+        text = ""
+    # Collapse whitespace, take the first 220 chars, keep it on one line.
+    snippet = " ".join(text.split())[:220]
+    url = ""
+    try:
+        url = page.url
+    except Exception:
+        pass
+    return f"url={url[:120]} text={snippet!r}"
 
 
 def _with_region(url: str, hl: str, gl: str) -> str:
@@ -376,6 +435,11 @@ class MapsCollector:
             page.goto(url, wait_until="domcontentloaded", timeout=45_000)
             time.sleep(3.0)
 
+            # EU GDPR consent wall: dismiss it so the feed can load. On an EU
+            # IP this appears on first visit and otherwise hides every result.
+            if handle_consent_wall(page):
+                time.sleep(3.0)
+
             # Bot / captcha detection: cooldown + skip query, never mark dead.
             if detect_bot_challenge(page.content()):
                 log.captcha("bot challenge for query '%s' — cooling down %.0fs",
@@ -389,11 +453,10 @@ class MapsCollector:
             log.info("query '%s': found %d listing place URLs", query, len(listing_links))
 
             # Fail-closed: a non-empty search that yields 0 listing links means
-            # the collector is broken (selector drift / interstitial), NOT that
-            # the query genuinely has no results. Raise so the pipeline records
-            # the query as `failed` instead of silently marking it `done`.
+            # the collector is broken, NOT that the query has no results. Attach
+            # a diagnostic snippet so the log explains *what* was on the page.
             if not listing_links:
-                raise ZeroListingsError(query)
+                raise ZeroListingsError(query, _page_diagnostic(page))
 
             for place_url in listing_links:
                 if self._max_total and self._yielded_total >= self._max_total:

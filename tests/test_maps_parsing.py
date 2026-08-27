@@ -5,6 +5,18 @@ from scraper.maps.collector import (
 )
 
 
+class TestConsentHandling:
+    def test_consent_helpers_importable(self):
+        # handle_consent_wall is browser-bound; just verify the button/marker
+        # constants are populated and the module exposes the entry points.
+        from scraper.maps import collector as c
+        assert hasattr(c, "handle_consent_wall")
+        assert len(c._CONSENT_MARKERS) > 0
+        assert len(c._CONSENT_BUTTON_SELECTORS) > 0
+        assert "accept all" in c._CONSENT_MARKERS
+        assert "alle akzeptieren" in c._CONSENT_MARKERS
+
+
 class TestRegionParam:
     def test_appends_hl_gl_to_url_with_query(self):
         url = "https://www.google.com/maps/search/dentists%20in%20Dallas?hl=xx"

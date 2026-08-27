@@ -65,16 +65,22 @@ class BrowserManager:
         log.info("browser launched (headless=%s)", self._headless)
         return self._browser
 
-    def new_context(self, proxy: dict | None = None):
+    def new_context(self, proxy: dict | None = None, geolocation: dict | None = None,
+                    locale: str = "en-US"):
         browser = self._ensure_browser()
         ctx_proxy = proxy or self._proxy
         kwargs = {"viewport": {"width": 1366, "height": 900},
+                  "locale": locale,
+                  "timezone_id": "America/New_York",
                   "user_agent": (
                       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
                       "Chrome/124.0 Safari/537.36")}
         if ctx_proxy:
             kwargs["proxy"] = ctx_proxy
+        if geolocation:
+            kwargs["geolocation"] = geolocation
+            kwargs["permissions"] = ["geolocation"]
         return browser.new_context(**kwargs)
 
     def mark_query(self) -> None:

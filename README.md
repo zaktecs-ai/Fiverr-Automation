@@ -179,6 +179,7 @@ mocks — no live Google Maps needed.
 | Job seems stuck | Check `scraper.log`; every stage has a timeout, nothing hangs forever |
 | Duplicate records after restart | Should not happen — ensure you're using the same `output/` dir |
 | Memory creeping up | Lower `concurrency.*`, keep `browser_restart_after_queries` small |
+| `found 0 listing place URLs` on an EU VPS | The GDPR consent wall hid the feed — the collector now auto-dismisses it; `git pull` and retry |
 
 ---
 

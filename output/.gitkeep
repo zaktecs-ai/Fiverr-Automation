@@ -1,0 +1,1 @@
+# Keeps the output/ directory in git. Runtime outputs are git-ignored elsewhere.

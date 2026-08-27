@@ -1,0 +1,42 @@
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Outputs (runtime artifacts — never commit scraped data or state)
+output/
+!output/.gitkeep
+*.xlsx
+*.csv
+*.log
+checkpoint.json
+checkpoint.backup.json
+run_summary.json
+
+# Playwright / browser artifacts
+playwright-report/
+test-results/
+*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

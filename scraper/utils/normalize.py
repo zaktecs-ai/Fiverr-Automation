@@ -1,0 +1,273 @@
+"""Normalization primitives for URLs, phones, emails, and text.
+
+These are pure functions so they are trivially unit-testable and have no
+global state. They are the single source of truth for canonical keys used by
+deduplication and validation.
+"""
+from __future__ import annotations
+
+import re
+import unicodedata
+from urllib.parse import urlsplit, urlunsplit, parse_qsl
+
+# Tracking / analytics query parameters that never contribute identity.
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "gclid", "gclsrc", "dclid", "fbclid", "msclkid", "mc_cid",
+    "mc_eid", "igshid", "ref", "ref_src", "source", "cmpid", "_ga",
+    "_gl", "yclid", "zanpid", "twclid", "wbraid", "gbraid",
+}
+
+# Common Google redirect wrappers that resolve to a real destination via `url=`.
+_GOOGLE_WRAPPERS = {
+    "google.com", "www.google.com", "google.co.uk", "google.ca",
+    "maps.google.com", "l.facebook.com", "lm.facebook.com",
+}
+
+# Params that look like long echo/redirect payloads and are safe to drop.
+_REDUNDANT_PARAM_RE = re.compile(r"^(redirect|url|target|goto|next|return|dest|continue)=.+$", re.I)
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
+def normalize_text(value) -> str:
+    """Collapse whitespace and strip control characters; returns 'N/A' for empty."""
+    if value is None:
+        return "N/A"
+    s = str(value)
+    s = "".join(ch for ch in s if ch.isprintable() or ch in "\t ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or "N/A"
+
+
+def normalize_url(raw: str) -> str:
+    """Return a canonical identity URL or 'N/A'.
+
+    Removes scheme casing, default ports, fragments, tracking params, trailing
+    slashes, and obvious Google/Facebook redirect wrappers. Preserves the
+    meaningful path/query where it actually identifies content.
+    """
+    if not raw:
+        return "N/A"
+    if raw is None or str(raw).strip().upper() == "N/A":
+        return "N/A"
+    raw = raw.strip()
+    # Parse first to detect an existing scheme (e.g. mailto:, tel:, javascript:).
+    pre = urlsplit(raw)
+    if pre.scheme and pre.scheme.lower() not in ("http", "https"):
+        return "N/A"
+    if not raw.lower().startswith(("http://", "https://")):
+        raw = "https://" + raw
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return "N/A"
+
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https"):
+        return "N/A"
+
+    host = (parts.hostname or "").lower()
+    if not host:
+        return "N/A"
+    # Strip a leading "www." for canonical identity.
+    if host.startswith("www."):
+        host = host[4:]
+
+    # Unwrap Google/Facebook redirect wrappers when they expose a `url=` param.
+    if host in _GOOGLE_WRAPPERS:
+        q = dict(parse_qsl(parts.query, keep_blank_values=True))
+        for key in ("url", "u", "q", "target"):
+            candidate = q.get(key) or q.get(key.lower())
+            if candidate and candidate.lower().startswith(("http://", "https://")):
+                return normalize_url(candidate)
+
+    # Drop the default port for the scheme.
+    port = parts.port
+    netloc = host
+    if port is not None:
+        if not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+            netloc = f"{host}:{port}"
+
+    # Strip tracking / redundant params.
+    kept = []
+    for k, v in parse_qsl(parts.query, keep_blank_values=True):
+        kl = k.lower()
+        if kl in _TRACKING_PARAMS:
+            continue
+        if kl in ("redirect", "url", "target", "goto", "next", "return", "dest", "continue") and len(v or "") > 200:
+            continue
+        kept.append((k, v))
+    query = "&".join(f"{k}={v}" for k, v in kept)
+
+    # Normalize path: collapse duplicate slashes, drop trailing slashes, and
+    # treat a bare root ("/") as empty so the canonical form has no trailing slash.
+    path = parts.path or ""
+    path = re.sub(r"/{2,}", "/", path)
+    if path == "/":
+        path = ""
+    elif path.endswith("/"):
+        path = path.rstrip("/")
+
+    return urlunsplit((scheme, netloc, path, query, ""))
+
+
+def extract_domain(url: str) -> str:
+    """Return a lowercase registrar-level domain (e.g. 'example.co.uk') or ''."""
+    norm = normalize_url(url)
+    if norm == "N/A":
+        return ""
+    host = urlsplit(norm).hostname or ""
+    return canonical_domain(host)
+
+
+def canonical_domain(host: str) -> str:
+    """Reduce a hostname to its registrable domain using a conservative heuristic.
+
+    Falls back to the last two labels when the public-suffix list is unavailable.
+    Handles common two-part country TLDs (co.uk, com.au, co.nz, ...) and common
+    multi-label suffixes.
+    """
+    host = (host or "").lower().strip().strip(".")
+    if not host:
+        return ""
+    labels = host.split(".")
+    _2ND_LEVEL = {  # second-level domain under a country code TLD
+        "co", "com", "org", "net", "gov", "edu", "ac", "me", "ltd", "plc",
+    }
+    _KNOWN_PRIVATE_SUFFIX = {
+        "github.io", "pages.dev", "web.app", "firebaseapp.com",
+    }
+    if len(labels) >= 3 and labels[-2] in _2ND_LEVEL and len(labels[-1]) == 2:
+        return ".".join(labels[-3:])
+    if len(labels) >= 3:
+        tail = ".".join(labels[-2:])
+        if tail in _KNOWN_PRIVATE_SUFFIX:
+            return ".".join(labels[-3:])
+    if len(labels) >= 2:
+        return ".".join(labels[-2:])
+    return host
+
+
+def normalize_phone(raw: str, default_country: str = "US") -> str:
+    """Normalize a phone number to E.164-like digits, country-aware.
+
+    Accepts local US formats when `default_country` is US-like, returning
+    digits with a leading country code where determinable. Never fabricates.
+    Returns 'N/A' if the input has no digit.
+    """
+    if raw is None:
+        return "N/A"
+    s = unicodedata.normalize("NFKD", str(raw))
+    digits = re.sub(r"\D", "", s)
+    if not digits:
+        return "N/A"
+
+    # Strip a leading country code if explicitly present (+1 / 001 / 1).
+    # We first detect an international prefix and normalize to pure digits.
+    cc = _guess_country_code(digits, default_country)
+    if cc:
+        return cc + digits if digits else digits
+    return digits
+
+
+_COUNTRY_CODES = {
+    "US": "1", "CA": "1", "GB": "44", "AU": "61", "NZ": "64",
+    "DE": "49", "FR": "33", "IT": "39", "ES": "34", "NL": "31",
+    "PK": "92", "IN": "91", "AE": "971", "SG": "65", "IE": "353",
+}
+
+
+def _guess_country_code(digits: str, default_country: str) -> str:
+    """Best-effort: return leading country-code digits when confident, else ''."""
+    for code in sorted((_COUNTRY_CODES.values()), key=len, reverse=True):
+        if digits.startswith(code):
+            return code
+    # North-American 11-digit numbers usually have a leading '1'.
+    if len(digits) == 11 and digits.startswith("1"):
+        return "1"
+    return _COUNTRY_CODES.get(default_country.upper(), "")
+
+
+def normalize_email(raw: str) -> str:
+    """Lowercase and strip whitespace from an email address."""
+    if not raw:
+        return ""
+    return str(raw).strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Email validation & dummy/fake filtering
+# ---------------------------------------------------------------------------
+
+# A conservative but RFC-reasonable pattern. Rejects spaces, most junk.
+_VALID_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+
+# Domains that are never a business's real inbox (example/test/placeholder TLDs
+# and obvious template stand-ins). Deliberately does NOT include real parked
+# domains like business.com/company.com, which would wrongly reject real mail.
+_DUMMY_DOMAINS = {
+    "example.com", "example.org", "example.net", "example.co",
+    "test.com", "test.org", "test.net",
+    "yourdomain.com", "yoursite.com", "yourwebsite.com", "mywebsite.com",
+    "mysite.com", "domain.com", "email.com", "mail.com", "domain.org",
+    "website.com", "placeholder.com", "sample.com", "abc.com", "xyz.com",
+    "localhost", "localhost.localdomain",
+    "foo.com", "foobar.com", "bar.com", "sitename.com",
+    "example-email.com", "fake.com",
+}
+
+# Usernames that are placeholders regardless of domain.
+_DUMMY_LOCAL = {
+    "info", "test", "testing", "example", "sample", "yourname", "name",
+    "user", "username", "email", "emailaddress", "you", "your", "someone",
+    "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon",
+    "postmaster", "abuse", "admin", "webmaster",
+}
+
+# Substrings that indicate an asset/marketing/email-protection artifact, not a contact.
+_JUNK_PATTERNS = [
+    re.compile(r"[0-9a-f]{20,}", re.I),                 # hash fragments
+    re.compile(r"\.(png|jpe?g|gif|svg|webp|css|js|json|woff2?|eot|ttf)$", re.I),
+    re.compile(r"@2x\.", re.I),                          # retina asset shorthand
+    re.compile(r"^[^@]+@sentry", re.I),
+    re.compile(r"^[^@]+@(amp|sqs|s3|cloudfront|cdn)\."),
+]
+
+
+def is_valid_email(email: str, max_length: int = 120) -> bool:
+    """Syntax-validate an email (no DNS)."""
+    if not email or len(email) > max_length:
+        return False
+    return bool(_VALID_EMAIL_RE.match(normalize_email(email)))
+
+
+def email_rejection_reason(email: str, max_length: int = 120) -> str | None:
+    """Return a human reason an email should be rejected, else None."""
+    e = normalize_email(email)
+    if not e:
+        return "empty"
+    if len(e) > max_length:
+        return "too_long"
+    if not _VALID_EMAIL_RE.match(e):
+        return "invalid_syntax"
+    local, _, domain = e.rpartition("@")
+    if domain in _DUMMY_DOMAINS:
+        return "dummy_domain"
+    if local.lower() in _DUMMY_LOCAL:
+        return "dummy_local"
+    for pat in _JUNK_PATTERNS:
+        if pat.search(e):
+            return "suspicious_pattern"
+    return None
+
+
+def is_usable_email(email: str, max_length: int = 120) -> bool:
+    """True only when the email passes the full static cleaning pipeline."""
+    return email_rejection_reason(email, max_length) is None

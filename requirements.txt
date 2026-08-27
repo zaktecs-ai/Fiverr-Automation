@@ -1,0 +1,20 @@
+# --- Core runtime ---
+PyYAML>=6.0            # config.yaml parsing
+python-dotenv>=1.0     # .env secrets loading
+httpx>=0.27            # HTTP-first website fetching (with timeout control)
+beautifulsoup4>=4.12   # HTML parsing for enrichment/extraction
+lxml>=5.0              # fast HTML/XML parser backend for BeautifulSoup + sitemaps
+playwright>=1.45       # browser automation (Google Maps + JS-heavy fallback)
+dnspython>=2.6         # MX lookups
+
+# --- Output ---
+openpyxl>=3.1          # XLSX generation from final CSV
+
+# --- Optional / lazy ---
+# Wappalyzer-compatible tech detection is loaded opportunistically if installed;
+# a pure-regex fallback is built in so the engine never depends on it.
+setuptools>=65.0       # needed by some wappalyzer installs
+
+# --- Optional OCR (disabled by default) ---
+# pillow>=10.0
+# pytesseract>=0.3

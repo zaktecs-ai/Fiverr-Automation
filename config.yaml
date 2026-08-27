@@ -1,0 +1,251 @@
+# ============================================================================
+#  B2B LEAD SCRAPER ENGINE — CONFIGURATION
+# ============================================================================
+#  This is the ONE file you edit to run a job. Everything is explained below.
+#
+#  Format notes:
+#    * Lines starting with "#" are comments (ignored).
+#    * TRUE / FALSE are written as `true` / `false`.
+#    * Lists start with "- " on their own line.
+#    * Text in ${SOMETHING} is pulled from your `.env` secrets file.
+#
+#  Every risky setting lists its SAFE RANGE and the value recommended for a
+#  12 GB RAM / 200 GB disk VPS. You can run bigger/faster values, but the
+#  engine will refuse values outside the hard limits (with a clear message)
+#  rather than let you crash the machine accidentally.
+# ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# JOB  —  what this run is about and where output goes.
+# ---------------------------------------------------------------------------
+job:
+  # A short name for this client/campaign. It becomes the output folder name.
+  # Safe value: any letters/numbers/underscore (no spaces or slashes).
+  client_name: luxury_pool_campaign
+
+  # The base name for the main CSV/XLSX files. Usually the same as client_name.
+  output_filename: luxury_pool_campaign
+
+  # HOW MANY RESULTS TO COLLECT.
+  #   max_results_per_query  = the cap for EACH search query (0 = no limit).
+  #   max_total_results      = the cap for the WHOLE job    (0 = no limit).
+  # These are independent. Example: 3 queries * 500 each = max 1500 total.
+  max_results_per_query: 0
+  max_total_results: 0
+
+
+# ---------------------------------------------------------------------------
+# QUERIES  —  the search terms, EXACTLY as you would type in Google Maps.
+# ---------------------------------------------------------------------------
+queries:
+  - "dentists in Dallas, TX"
+  - "dentists in Houston, TX"
+  - "dentists in Austin, TX"
+
+
+# ---------------------------------------------------------------------------
+# MAPS  —  how the Google Maps collector behaves.
+# ---------------------------------------------------------------------------
+maps:
+  # Permanently-closed businesses: include them in output?
+  #   false = skip them (default, cleaner leads)
+  #   true  = keep them (you can filter later)
+  include_permanently_closed: false
+
+  # Hide the browser window? Keep true on a VPS (there is no screen).
+  headless: true
+
+  # Restart the browser every N queries. Keeps memory healthy on long runs.
+  # 0 = never restart by count (the engine still recycles on memory pressure).
+  # Recommended for 12 GB VPS: 5
+  browser_restart_after_queries: 5
+
+  # Slowness of scrolling the Maps feed (milliseconds). Higher = gentler.
+  scroll_delay_min_ms: 800
+  scroll_delay_max_ms: 1600
+
+  # Max seconds to wait for a page to load before giving up on it.
+  page_navigation_timeout_ms: 30000
+
+
+# ---------------------------------------------------------------------------
+# WEBSITE  —  how the engine visits and enriches business websites.
+# ---------------------------------------------------------------------------
+website:
+  # Only keep/enrich businesses that HAVE a website?
+  #   true  = skip businesses with no website (saves a lot of VPS time)
+  #   false = process everyone
+  require_website: true
+
+  # If HTTP can't get everything, escalate to a real browser (Playwright)?
+  # Strongly recommended: true. Costs more CPU/RAM per page only when needed.
+  enable_playwright_fallback: true
+
+  # Use sitemap.xml to find relevant pages (targeted, not a full crawl)?
+  enable_sitemap: true
+
+  # Maximum pages visited per website. Keeps enrichment fast and bounded.
+  # Safe range: 1–50. Recommended: 8.
+  max_pages_per_site: 8
+
+  # Hard cap on total time spent on ONE website (seconds). Prevents one slow
+  # site from freezing the job. Recommended: 120.
+  overall_site_timeout_seconds: 120
+
+  # HTTP timeouts (seconds). Connect = opening the connection; read = between
+  # data chunks. Lower = faster fail, higher = tolerate slow sites.
+  http_connect_timeout_seconds: 10
+  http_read_timeout_seconds: 20
+
+  # Timeout for a single browser page load (seconds).
+  page_navigation_timeout_seconds: 30
+
+  # Use the Wappalyzer tech detector if installed (else built-in regex).
+  use_wappalyzer: true
+
+
+# ---------------------------------------------------------------------------
+# EMAIL  —  extraction + optional verification.
+# ---------------------------------------------------------------------------
+email:
+  # Collect emails from websites at all?
+  enabled: true
+
+  # Longest email address we will trust (characters). Longer = probably junk.
+  # Safe range: 10–300. Recommended: 120.
+  max_email_length: 120
+
+  # DNS MX check (does the domain accept email)? Optional; adds a small delay.
+  enable_mx_check: false
+
+  # Optical character recognition for emails hidden inside images.
+  # OFF by default — it is slow. Only turn on for targeted needs.
+  enable_ocr: false
+
+
+# ---------------------------------------------------------------------------
+# SMTP  —  direct email verification (OPTIONAL, off by default).
+# ---------------------------------------------------------------------------
+smtp:
+  # Master switch. When false, everything below is ignored and the engine
+  # simply reports "Not Checked" for every email.
+  enabled: false
+
+  # Number of simultaneous SMTP checks. Keep low — this is slow and can
+  # trigger rate limits. Safe range: 1–8. Recommended: 3.
+  workers: 3
+
+  # How many times to retry a failed SMTP check. Recommended: 1.
+  retries: 1
+
+  # Timeouts for the SMTP connection / the whole check (seconds).
+  connection_timeout_seconds: 10
+  verification_timeout_seconds: 20
+
+
+# ---------------------------------------------------------------------------
+# CONCURRENCY  —  how many things run at once. Lower = safer on 12 GB RAM.
+# ---------------------------------------------------------------------------
+concurrency:
+  # Simultaneous Google Maps browser tabs. Safe range: 1–4. Recommended: 2.
+  google_maps_workers: 2
+
+  # Simultaneous website HTTP fetches. Safe range: 1–8. Recommended: 4.
+  website_workers: 4
+
+  # Simultaneous Playwright (browser) website fetches. Safe range: 1–4.
+  # Recommended: 2 — browser tabs use a LOT of RAM.
+  playwright_workers: 2
+
+
+# ---------------------------------------------------------------------------
+# DELAYS  —  pacing between requests, to be kind to sites and avoid blocks.
+# ---------------------------------------------------------------------------
+delays:
+  # Random pause after each Google Maps action (seconds).
+  maps_min_seconds: 2
+  maps_max_seconds: 5
+
+  # Random pause between website fetches (seconds).
+  site_min_seconds: 0.5
+  site_max_seconds: 1.5
+
+  # Extra pause when the engine detects a block/challenge (seconds).
+  cooldown_seconds: 60
+
+
+# ---------------------------------------------------------------------------
+# PROXY  —  DISABLED by default (you don't have proxies yet).
+# ---------------------------------------------------------------------------
+#  Leave this alone. When you add proxies later, fill in `.env` and flip
+#  `enabled: true` — no code changes needed.
+proxy:
+  enabled: false
+  # http: ${HTTP_PROXY}      # set in .env when ready
+  # https: ${HTTPS_PROXY}
+  # pool: []                 # rotated list of proxy URLs (future)
+  # rotation: round_robin    # round_robin | random
+
+
+# ---------------------------------------------------------------------------
+# SIGNALS  —  things the engine looks for on a website (output "YES"/"NO").
+# ---------------------------------------------------------------------------
+#  Built-in signals (meta pixel, GA4, GTM, booking, chat, pricing, financing,
+#  licensed&insured, established, portfolio, mobile service, membership) are
+#  always available. You can add your OWN here without touching Python:
+#
+#    my_custom_signal:
+#      enabled: true
+#      keywords: ["family owned", "established in"]
+#      regex: ["since\\s+(19|20)\\d{2}"]
+#      match_logic: ANY      # ANY = any hit counts; ALL = every rule must hit
+signals:
+  family_owned:
+    enabled: true
+    keywords:
+      - "family owned"
+      - "family-run"
+      - "2nd generation"
+    regex:
+      - "since\\s+(19|20)\\d{2}"
+    match_logic: ANY
+
+
+# ---------------------------------------------------------------------------
+# FILTERS  —  keep/reject businesses BEFORE the expensive website step.
+# ---------------------------------------------------------------------------
+#  Four groups. A record must PASS include groups and NOT get caught by
+#  exclude groups to survive.
+#
+#  include_all : every condition must be true            (AND)
+#  include_any : at least one condition must be true      (OR)
+#  exclude_all : rejected if every condition is true      (AND)
+#  exclude_any : rejected if any condition is true        (OR)
+#
+#  Useful fields: website (yes/no), reviews (review_count), rating,
+#  email_found (yes/no), meta_pixel (yes/no), ga4 (yes/no), gtm (yes/no).
+#  Comparison example:  - field: review_count
+#                          op: ">="
+#                          value: 15
+filters:
+  include_all:
+    - field: website
+      op: "="
+      value: "yes"
+    - field: review_count
+      op: ">="
+      value: 10
+    - field: rating
+      op: ">="
+      value: 4.0
+  # include_any: []
+  # exclude_any: []
+
+
+# ---------------------------------------------------------------------------
+# COUNTRY  —  affects phone-number normalization.
+# ---------------------------------------------------------------------------
+country:
+  # Default country code applied when a phone has no explicit country prefix.
+  default: US

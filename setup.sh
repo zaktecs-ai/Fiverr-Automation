@@ -77,7 +77,8 @@ python -m playwright install --with-deps chromium
 # --- 5. Output dirs ---------------------------------------------------------
 echo "==> [5/5] Preparing output directory..."
 mkdir -p output
-[ -f config.yaml ] || cp config.yaml.example config.yaml 2>/dev/null || true
+# `config.yaml` ships in the repo; only copy from a template if one exists.
+[ -f config.yaml ] || { [ -f config.yaml.example ] && cp config.yaml.example config.yaml; }
 
 echo ""
 echo "=============================================================="

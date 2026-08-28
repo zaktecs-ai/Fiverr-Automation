@@ -23,11 +23,13 @@ log = logging.getLogger(__name__)
 
 class BrowserManager:
     def __init__(self, restart_after_queries: int = 0, headless: bool = True,
-                 proxy: dict | None = None, nav_timeout_ms: int = 30_000):
+                 proxy: dict | None = None, nav_timeout_ms: int = 30_000,
+                 display: str | None = None):
         self._restart_after_queries = restart_after_queries
         self._headless = headless
         self._proxy = proxy
         self._nav_timeout_ms = nav_timeout_ms
+        self._display = display
         self._pw = None
         self._browser = None
         self._queries_processed = 0
@@ -36,34 +38,47 @@ class BrowserManager:
 
     # ------------------------------------------------------------------
     def _ensure_browser(self):
+        # Fast path: already launched (safe — a set reference).
         if self._browser is not None:
             return self._browser
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError as e:  # pragma: no cover
-            raise RuntimeError("Playwright is not installed. Run ./setup.sh or "
-                               "`pip install playwright && playwright install`.") from e
-        self._pw = sync_playwright().start()
-        launch_kwargs = {"headless": self._headless}
-        if self._proxy:
-            launch_kwargs["proxy"] = self._proxy
-        try:
-            self._browser = self._pw.chromium.launch(**launch_kwargs)
-        except Exception as e:  # pragma: no cover - env dependent (missing binary)
-            # The far more common failure than a missing package: the package is
-            # installed but the Chromium binary was never downloaded.
-            msg = str(e).lower()
-            if "executable doesn't exist" in msg or "playwright install" in msg or \
-                    "browser" in msg and "not found" in msg:
-                self._pw.stop()
-                self._pw = None
-                raise RuntimeError(
-                    "Chromium browser binary is missing. Run "
-                    "`python -m playwright install chromium` (or re-run ./setup.sh)."
-                ) from e
-            raise
-        log.info("browser launched (headless=%s)", self._headless)
-        return self._browser
+        # Slow path guarded by the lock so two threads racing on first use
+        # cannot both launch a Chromium process (double-launch / leak).
+        with self._lock:
+            if self._browser is not None:
+                return self._browser
+            try:
+                from playwright.sync_api import sync_playwright
+            except ImportError as e:  # pragma: no cover
+                raise RuntimeError("Playwright is not installed. Run ./setup.sh or "
+                                   "`pip install playwright && playwright install`.") from e
+            self._pw = sync_playwright().start()
+            launch_kwargs = {"headless": self._headless}
+            if not self._headless and self._display:
+                # Route the visible browser to a specific X display (the Scraper
+                # Engine virtual screen, e.g. ":2" from Xtightvnc) so an operator
+                # can watch it and solve CAPTCHAs over TightVNC.
+                import os as _os
+                _os.environ["DISPLAY"] = self._display
+                launch_kwargs["env"] = {"DISPLAY": self._display}
+            if self._proxy:
+                launch_kwargs["proxy"] = self._proxy
+            try:
+                self._browser = self._pw.chromium.launch(**launch_kwargs)
+            except Exception as e:  # pragma: no cover - env dependent (missing binary)
+                # The far more common failure than a missing package: the package is
+                # installed but the Chromium binary was never downloaded.
+                msg = str(e).lower()
+                if "executable doesn't exist" in msg or "playwright install" in msg or \
+                        "browser" in msg and "not found" in msg:
+                    self._pw.stop()
+                    self._pw = None
+                    raise RuntimeError(
+                        "Chromium browser binary is missing. Run "
+                        "`python -m playwright install chromium` (or re-run ./setup.sh)."
+                    ) from e
+                raise
+            log.info("browser launched (headless=%s)", self._headless)
+            return self._browser
 
     def new_context(self, proxy: dict | None = None, geolocation: dict | None = None,
                     locale: str = "en-US"):

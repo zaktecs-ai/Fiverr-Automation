@@ -132,7 +132,10 @@ class WebsiteFetcher:
                 elif r.status_code >= 500:
                     result.failure_reason = FailureReason.UNREACHABLE
                 else:
-                    result.failure_reason = FailureReason.UNKNOWN
+                    # Non-standard status (202, 301-not-followed, etc.) may still
+                    # carry a challenge body; classify it before defaulting.
+                    block = classify_html_block(r.text)
+                    result.failure_reason = block or FailureReason.UNKNOWN
         except httpx.ConnectTimeout:
             result.failure_reason = FailureReason.TIMEOUT
         except httpx.ReadTimeout:

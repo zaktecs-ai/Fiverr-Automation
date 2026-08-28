@@ -115,8 +115,17 @@ def _with_region(url: str, hl: str, gl: str) -> str:
     query itself carries a US location). Uses `?` the first time (a bare
     search path has no query string yet), `&` thereafter.
     """
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}hl={hl}&gl={gl}"
+    # Remove any existing hl/gl (and their values) so we don't append duplicates
+    # (e.g. "?hl=fr&gl=fr&hl=en&gl=us") which Google may resolve unpredictably.
+    base = re.sub(r"([&?])(hl|gl)=[^&]*", "", url, flags=re.I)
+    # Restore the query delimiter correctly after stripping.
+    if "?" in base:
+        if base.endswith("&"):
+            base = base.rstrip("&") + "&"
+        elif not base.endswith("?"):
+            base += "&"
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}hl={hl}&gl={gl}"
 
 # ---- Result-card selectors (layered: primary -> alternate -> fallback) ----
 RESULT_CARD_SELECTORS = [
@@ -253,17 +262,18 @@ def split_source_location(query: str) -> tuple[str, str]:
 # Browser-bound extraction
 # ---------------------------------------------------------------------------
 
-def _open_business_page(ctx, place_url: str, hl: str = "en", gl: str = "us") -> dict:
+def _open_business_page(ctx, place_url: str, hl: str = "en", gl: str = "us",
+                        nav_timeout_ms: int = 30_000) -> dict:
     """Open a single listing and extract fields (layered selectors + regex)."""
     data: dict = {}
     if not place_url:
         return data
     page = ctx.new_page()
-    page.set_default_timeout(30_000)
+    page.set_default_timeout(nav_timeout_ms)
     try:
         # Force language/region on the business page too, so labels stay English.
         page.goto(_with_region(place_url, hl, gl),
-                  wait_until="domcontentloaded", timeout=30_000)
+                  wait_until="domcontentloaded", timeout=nav_timeout_ms)
         time.sleep(1.5)
 
         data["business_name"] = _first(page, NAME_SELECTORS)
@@ -412,7 +422,9 @@ class MapsCollector:
     def __init__(self, browser_manager, *, max_results_per_query: int = 0,
                  max_total_results: int = 0, include_permanently_closed: bool = False,
                  scroll_delay: tuple[int, int] = (800, 1600),
-                 cooldown_seconds: float = 0.0, hl: str = "en", gl: str = "us"):
+                 cooldown_seconds: float = 0.0, hl: str = "en", gl: str = "us",
+                 nav_timeout_ms: int = 30_000,
+                 maps_delay: tuple[float, float] = (0.0, 0.0)):
         self._bm = browser_manager
         self._max_per_query = max_results_per_query
         self._max_total = max_total_results
@@ -421,6 +433,8 @@ class MapsCollector:
         self._cooldown = cooldown_seconds
         self._hl = hl
         self._gl = gl
+        self._nav_timeout_ms = nav_timeout_ms
+        self._maps_delay = maps_delay
         self._yielded_total = 0
 
     def collect(self, query: str) -> Iterator[dict]:
@@ -440,13 +454,15 @@ class MapsCollector:
             if handle_consent_wall(page):
                 time.sleep(3.0)
 
-            # Bot / captcha detection: cooldown + skip query, never mark dead.
+            # Bot / captcha detection: cooldown, then fail-closed so the
+            # pipeline marks the query `failed` (retry-able) rather than `done`.
             if detect_bot_challenge(page.content()):
                 log.captcha("bot challenge for query '%s' — cooling down %.0fs",
                             query, self._cooldown)
                 if self._cooldown:
                     time.sleep(self._cooldown)
-                return
+                raise ZeroListingsError(
+                    query, "bot challenge / CAPTCHA detected on the search page")
 
             self._scroll_results(page)
             listing_links = self._extract_listing_links(page)
@@ -463,7 +479,8 @@ class MapsCollector:
                     break
                 if self._max_per_query and yielded >= self._max_per_query:
                     break
-                data = _open_business_page(ctx, place_url, self._hl, self._gl)
+                data = _open_business_page(ctx, place_url, self._hl, self._gl,
+                                           self._nav_timeout_ms)
                 if not data.get("business_name"):
                     parsed = parse_google_maps_url(place_url)
                     data["business_name"] = parsed.get("place_name") or "N/A"
@@ -475,6 +492,7 @@ class MapsCollector:
                 self._yielded_total += 1
                 yield data
                 self._small_pause()
+                self._maps_pacing_pause()
         finally:
             try:
                 page.close()
@@ -517,8 +535,14 @@ class MapsCollector:
                 break
 
     def _has_no_more_results(self, page) -> bool:
+        # Light check via inner_text (cheap) instead of full page.content()
+        # serialization, which was called every scroll step (up to 12x/query).
         try:
-            return "You've reached the end of the list" in page.content()
+            body = page.locator("body")
+            if body.count() == 0:
+                return False
+            text = body.inner_text(timeout=1500)
+            return "You've reached the end of the list" in text
         except Exception:
             return False
 
@@ -529,7 +553,7 @@ class MapsCollector:
             try:
                 locs = page.locator(sel)
                 n = locs.count()
-                for i in range(min(n, 200)):
+                for i in range(n):
                     href = locs.nth(i).get_attribute("href", timeout=1500)
                     if href and "/maps/place/" in href:
                         links.add(href)
@@ -541,3 +565,9 @@ class MapsCollector:
         """A small randomized pause between records to keep pacing gentle."""
         lo, hi = self._scroll_delay
         time.sleep(random.uniform(lo, hi) / 1000.0)
+
+    def _maps_pacing_pause(self) -> None:
+        """Apply `delays.maps_*` seconds between Maps actions (was dead config)."""
+        lo, hi = self._maps_delay
+        if hi > 0:
+            time.sleep(random.uniform(lo, hi) if hi > lo else hi)

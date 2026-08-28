@@ -58,11 +58,12 @@ case "${1:-start}" in
       log "screen ${DISPLAY_STR} is already running."
     else
       # Start TightVNC on the dedicated display + non-common port.
+      # (No -localhost flag: we WANT it to listen on all interfaces so a remote
+      #  TightVNC viewer can connect. `-localhost no` is invalid syntax.)
       vncserver "${DISPLAY_STR}" \
         -geometry "${RESOLUTION}" \
         -depth 24 \
         -rfbport "${VNC_PORT}" \
-        -localhost no \
         >/dev/null 2>&1
       log "screen ${DISPLAY_STR} started."
     fi

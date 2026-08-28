@@ -46,6 +46,21 @@ class BrowserManager:
         with self._lock:
             if self._browser is not None:
                 return self._browser
+            # Route the visible browser to a specific X display BEFORE starting
+            # Playwright, and set XAUTHORITY too. Both must be inherited by the
+            # browser process (set via the inherited environment, NOT a `env`
+            # launch kwarg that would replace the whole environment and drop
+            # XAUTHORITY — which caused "Client is not authorized to connect").
+            if not self._headless and self._display:
+                import os as _os
+                _os.environ["DISPLAY"] = self._display
+                # The VNC server stores the X11 magic cookie in ~/.Xauthority.
+                # Ensure it is exported so Chromium can present it to display :2.
+                xauth = _os.path.join(_os.path.expanduser("~"), ".Xauthority")
+                if _os.path.exists(xauth):
+                    _os.environ["XAUTHORITY"] = xauth
+                log.info("visible browser routed to display %s (XAUTHORITY=%s)",
+                         self._display, _os.environ.get("XAUTHORITY", ""))
             try:
                 from playwright.sync_api import sync_playwright
             except ImportError as e:  # pragma: no cover
@@ -53,13 +68,6 @@ class BrowserManager:
                                    "`pip install playwright && playwright install`.") from e
             self._pw = sync_playwright().start()
             launch_kwargs = {"headless": self._headless}
-            if not self._headless and self._display:
-                # Route the visible browser to a specific X display (the Scraper
-                # Engine virtual screen, e.g. ":2" from Xtightvnc) so an operator
-                # can watch it and solve CAPTCHAs over TightVNC.
-                import os as _os
-                _os.environ["DISPLAY"] = self._display
-                launch_kwargs["env"] = {"DISPLAY": self._display}
             if self._proxy:
                 launch_kwargs["proxy"] = self._proxy
             try:

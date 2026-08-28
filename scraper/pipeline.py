@@ -92,6 +92,10 @@ class Pipeline:
             timeout=smtp_cfg.get("verification_timeout_seconds", 20),
             retries=smtp_cfg.get("retries", 1),
         )
+        # Cap concurrent SMTP checks to `smtp.workers` (was validated but never
+        # applied; checks ran unbounded inside the enrichment pool).
+        smtp_workers = min(max(smtp_cfg.get("workers", 3), 1), 8)
+        self._smtp_sem = threading.Semaphore(smtp_workers)
 
         self.summary = RunSummary()
         self._query_keys: dict[str, str] = {}
@@ -172,11 +176,13 @@ class Pipeline:
             self._recycle_browser_if_needed(query)
             return
 
-        # Enrich accepted records (bounded website workers).
+        # Enrich accepted records (bounded website workers), then run the
+        # post-enrichment filters and finally commit — in that order so filters
+        # see uncommitted records (previously they ran after commit and skipped
+        # everything, making post-enrichment filters dead code).
         self._enrich_records(records)
-
-        # Post-enrichment filter: enrichment-populated fields (ga4/gtm/emails/…).
         self._apply_post_filters(records)
+        self._commit_accepted(records)
 
         # Mark query done.
         self.store.set_query_status(query, "done")
@@ -185,18 +191,36 @@ class Pipeline:
         self._recycle_browser_if_needed(query)
 
     def _apply_post_filters(self, records: list[BusinessRecord]) -> None:
-        """Re-check enrichment-dependent filters; reject records that fail."""
+        """Re-check enrichment-dependent filters; reject records that fail.
+
+        Records that fail are marked `filtered` and their dedup signals are
+        rolled back from the resolver so a later re-discovery in-session is not
+        blocked (fixes the rejected-record dedup leak).
+        """
         if not self.post_filters._filters:
             return
         for rec in records:
-            if rec.get("record_id") and self.store._stage(rec.get("record_id")) == "committed":
+            # Only run on records that survived enrichment/validation (not yet
+            # rejected); never skip them because of a prior commit.
+            if self.store._stage(rec.get("record_id")) in ("rejected", "filtered"):
                 continue
             ok, freason = self.post_filters.evaluate(rec.data)
             if not ok:
                 rec.set("filtered_out_reason", freason or "post_filtered")
                 self.store.set_stage(rec.get("record_id"), "filtered")
+                self._rollback_identity(rec)
                 self._append_row(self.filtered_path, rec.data)
                 self.summary.bump("filtered_out")
+
+    def _commit_accepted(self, records: list[BusinessRecord]) -> None:
+        """Commit records that passed enrichment, validation, and post-filters."""
+        for rec in records:
+            if self.store._stage(rec.get("record_id")) in ("rejected", "filtered"):
+                continue
+            row_index = self.csv.append(rec.data)
+            self.store.mark_committed(rec.get("record_id"), row_index)
+            self.store.set_stage(rec.get("record_id"), "committed")
+            self.summary.bump("final_exported_records")
 
     def _recycle_browser_if_needed(self, query: str) -> None:
         if self._bm is not None:
@@ -252,7 +276,10 @@ class Pipeline:
         d["latitude"] = raw.get("latitude") or "N/A"
         d["longitude"] = raw.get("longitude") or "N/A"
         d["google_maps_url"] = raw.get("google_maps_url") or "N/A"
-        d["place_id"] = raw.get("place_id") or "N/A"
+        # Missing place_id stays None for identity resolution (so a missing ID
+        # never collides in dedup); the CSV writer renders None as the configured
+        # missing value ("N/A") for display. Fixes critical dedup collision.
+        d["place_id"] = raw.get("place_id") if raw.get("place_id") else None
         d["plus_code"] = normalize_text(raw.get("plus_code"))
         d["rating"] = raw.get("rating") or "N/A"
         d["review_count"] = raw.get("review_count") or "N/A"
@@ -273,6 +300,12 @@ class Pipeline:
         return rec
 
     def _enrich_records(self, records: list[BusinessRecord]) -> None:
+        """Enrich + email-verify + validate each record (but do NOT commit).
+
+        Commit is deferred to `_commit_accepted` so post-enrichment filters can
+        reject a record before it is written, fixing the dead-code bug where
+        filters ran after every record was already committed.
+        """
         if not records:
             return
         # Sequential is safest for sites but bounded pool enables modest parallel.
@@ -336,16 +369,20 @@ class Pipeline:
         if not ok:
             rec.set("filtered_out_reason", "validation_failed: " + "; ".join(problems[:3]))
             self.store.set_stage(rec.get("record_id"), "rejected")
+            self._rollback_identity(rec)
             self._append_row(self.failed_path, rec.data)
             self.summary.bump("errors")
             return
         rec.set("filtered_out_reason", "")
+        # NOTE: commit (CSV + checkpoint 'committed' stage) is deferred to
+        # `_commit_accepted`, which runs after post-enrichment filters.
 
-        # Commit atomically: CSV row then checkpoint stage.
-        row_index = self.csv.append(rec.data)
-        self.store.mark_committed(rec.get("record_id"), row_index)
-        self.store.set_stage(rec.get("record_id"), "committed")
-        self.summary.bump("final_exported_records")
+    def _rollback_identity(self, rec: BusinessRecord) -> None:
+        """Undo a record's dedup registration when it is rejected/filtered."""
+        try:
+            self.resolver.rollback(rec.data)
+        except Exception as e:  # noqa: BLE001
+            log.debug("dedup rollback skipped: %s", e)
 
     def _apply_email_verification(self, rec: BusinessRecord) -> None:
         email_cfg = self.cfg.get("email", {})
@@ -374,7 +411,8 @@ class Pipeline:
             rec.set("mx_reason", "mx_disabled")
 
         if self.smtp.enabled:
-            status, reason = self.smtp.verify(primary)
+            with self._smtp_sem:
+                status, reason = self.smtp.verify(primary)
             rec.set("smtp_status", status)
             rec.set("smtp_reason", reason)
             self.summary.bump("smtp_checked")

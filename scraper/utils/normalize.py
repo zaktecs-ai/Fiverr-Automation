@@ -165,12 +165,17 @@ def normalize_phone(raw: str, default_country: str = "US") -> str:
     if not digits:
         return "N/A"
 
-    # Strip a leading country code if explicitly present (+1 / 001 / 1).
-    # We first detect an international prefix and normalize to pure digits.
+    # Determine the country code WITHOUT re-adding it: if the number already
+    # carries a leading international prefix, return the digits unchanged;
+    # otherwise prefix the default country's code. This prevents the country
+    # code from being doubled for already-prefixed numbers (+1…, +92…, +971…,
+    # +44…) — which previously caused dedup collisions.
     cc = _guess_country_code(digits, default_country)
-    if cc:
-        return cc + digits if digits else digits
-    return digits
+    if not cc:
+        return digits
+    if digits.startswith(cc):
+        return digits
+    return cc + digits
 
 
 _COUNTRY_CODES = {
@@ -181,14 +186,37 @@ _COUNTRY_CODES = {
 
 
 def _guess_country_code(digits: str, default_country: str) -> str:
-    """Best-effort: return leading country-code digits when confident, else ''."""
-    for code in sorted((_COUNTRY_CODES.values()), key=len, reverse=True):
+    """Return the country-code digits to reconcile with `digits`.
+
+    Semantics (parse the country code *once*, never double it):
+      * If `digits` already carries a recognized international prefix, return
+        that prefix (so the caller leaves the number unchanged).
+      * Otherwise return the default country's code so the caller can prepend
+        it (a local, unprefixed number).
+      * Return '' when no code can be determined.
+
+    North-American Numbering Plan (US/CA) is handled by rule, not by the
+    ambiguous bare "1" prefix: an 11-digit number starting with "1" is already
+    international (1 + NANP), while a 10-digit number is a local number that
+    should gain the "1".
+    """
+    # Longest-match against explicit international prefixes (skip the bare "1",
+    # which is too ambiguous to be a reliable prefix by itself).
+    for code in sorted(set(_COUNTRY_CODES.values()), key=len, reverse=True):
+        if code == "1":
+            continue
         if digits.startswith(code):
             return code
-    # North-American 11-digit numbers usually have a leading '1'.
+    # An 11-digit number starting with "1" is already international (1 + NANP):
+    # unambiguous regardless of the default country.
     if len(digits) == 11 and digits.startswith("1"):
         return "1"
-    return _COUNTRY_CODES.get(default_country.upper(), "")
+    # North-American Numbering Plan: a 10-digit number is a local NANP number
+    # that should gain the leading "1" so +1-214… and 214… normalize identically.
+    if (default_country or "").upper() in ("US", "CA") and len(digits) == 10:
+        return "1"
+    # Unprefixed local number: use the default country's code.
+    return _COUNTRY_CODES.get((default_country or "").upper(), "")
 
 
 def normalize_email(raw: str) -> str:

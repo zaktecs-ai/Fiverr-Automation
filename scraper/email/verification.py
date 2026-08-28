@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import random
 import smtplib
-import socket
 import time
 
 from ..utils.dns_cache import DNSCache
@@ -30,7 +29,7 @@ _MX_CACHE = DNSCache(max_size=50_000, ttl=3600)
 
 
 class MXChecker:
-    """Cached MX lookup using dnspython (or a socket fallback)."""
+    """Cached MX lookup using dnspython (no safe fallback without it)."""
 
     def __init__(self, enabled: bool = False, timeout: float = 5.0):
         self.enabled = enabled
@@ -64,12 +63,10 @@ class MXChecker:
                 return "FAIL", "nxdomain"
             except Exception as e:
                 return "INCONCLUSIVE", f"dns_error:{type(e).__name__}"
-        # Fallback without dnspython.
-        try:
-            socket.getaddrinfo(domain, 25)
-            return "PASS", "socket_resolvable"
-        except Exception:
-            return "INCONCLUSIVE", "no_dns_library"
+        # Without dnspython there is no reliable MX lookup: an A-record connect
+        # to port 25 is NOT an MX check and would wrongly "PASS" any host with
+        # SMTP open. Fail honestly instead.
+        return "INCONCLUSIVE", "no_dns_library"
 
 
 class SMTPVerifier:

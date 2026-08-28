@@ -11,7 +11,9 @@ enrichment dict that the pipeline merges onto a BusinessRecord.
 from __future__ import annotations
 
 import logging
+import random
 import re
+import threading
 
 from ..email.extract import clean_emails, extract_emails
 from ..models import FailureReason
@@ -35,16 +37,36 @@ _SOCIAL_PATTERNS = {
 }
 
 
+# Each platform maps to a domain-anchored extraction pattern. Extraction is
+# anchored at the platform's own domain so a link can never be attributed to
+# the wrong social column (the previous unanchored regex matched any URL whose
+# tail looked like another platform's name).
+_SOCIAL_DOMAIN_PATTERNS = {
+    "facebook": re.compile(r"(https?://)?(?:www\.)?facebook\.com/[^\s\"'<>]*", re.I),
+    "instagram": re.compile(r"(https?://)?(?:www\.)?instagram\.com/[^\s\"'<>]*", re.I),
+    "linkedin": re.compile(r"(https?://)?(?:www\.)?linkedin\.com/[^\s\"'<>]*", re.I),
+    "youtube": re.compile(r"(https?://)?(?:www\.)?(youtube\.com|youtu\.be)/[^\s\"'<>]*", re.I),
+    "twitter_x": re.compile(r"(https?://)?(?:www\.)?(twitter\.com|x\.com)/[^\s\"'<>]*", re.I),
+    "tiktok": re.compile(r"(https?://)?(?:www\.)?tiktok\.com/[^\s\"'<>]*", re.I),
+    "pinterest": re.compile(r"(https?://)?(?:www\.)?pinterest\.com/[^\s\"'<>]*", re.I),
+}
+
+
 def detect_social_links(html: str, urls: list[str]) -> dict[str, str]:
-    """Return major social profile URLs (or 'N/A') from HTML + discovered URLs."""
+    """Return major social profile URLs (or 'N/A') from HTML + discovered URLs.
+
+    Each platform is matched by its own domain-anchored pattern and the URL is
+    extracted from that exact match, so a Facebook link never lands in the
+    Instagram column (or vice-versa).
+    """
     out = {k: "N/A" for k in _SOCIAL_PATTERNS}
     hay = "\n".join(urls or []) + "\n" + (html or "")
-    for platform, pat in _SOCIAL_PATTERNS.items():
+    for platform, pat in _SOCIAL_DOMAIN_PATTERNS.items():
         m = pat.search(hay)
         if m:
-            # Extract the full URL if possible.
-            url_m = re.search(rf"(?:https?://)?(?:www\.)?[^\s\"'>]*?(?:{platform}|{'tiktok' if platform=='tiktok' else ''})[^\s\"'>]*", hay, re.I)
-            out[platform] = url_m.group(0) if url_m else "YES"
+            url = m.group(0)
+            # Keep a bare scheme-less match but prefer to add a scheme.
+            out[platform] = url if "://" in url else "https://" + url
     return out
 
 
@@ -73,6 +95,19 @@ class WebsiteEnricher:
         self._max_pages = site.get("max_pages_per_site", 8)
         self._overall_timeout = site.get("overall_site_timeout_seconds", 120.0)
         self._enable_sitemap = site.get("enable_sitemap", True)
+        self._email_enabled = cfg.get("email", {}).get("enabled", True)
+        # Site pacing (delay between site fetches) — was validated but never
+        # applied; now enforced as a randomized sleep around each fetch.
+        dl = cfg.get("delays", {})
+        self._site_min = float(dl.get("site_min_seconds", 0.0))
+        self._site_max = float(dl.get("site_max_seconds", 0.0))
+        # Reusable lock so all worker threads share one pacing clock.
+        self._sleep_lock = threading.Lock()
+        self._last_fetch_ts = 0.0
+        # Cap concurrent Playwright fallback browser tabs (was dead config).
+        pw_workers = min(max(int(cfg.get("concurrency", {}).get(
+            "playwright_workers", 2)), 1), 8)
+        self._pw_sem = threading.Semaphore(pw_workers)
 
     def enrich(self, website: str) -> dict:
         """Enrich a single website; returns a dict of website-intelligence fields."""
@@ -101,15 +136,20 @@ class WebsiteEnricher:
             return out
 
         def fetch_fn(u: str) -> FetchResult:
-            fr = self._fetcher.fetch(u)
-            if fr.failure_reason and not fr.html and self._playwright_enabled and self._bm:
-                fr = self._playwright_fetch(u)
-            return fr
+            return self._site_paced_fetch(u)
 
         crawler = SmartCrawler(max_pages=self._max_pages,
                                overall_timeout=self._overall_timeout,
                                enable_sitemap=self._enable_sitemap)
         result = crawler.crawl(url, fetch_fn, _has_required_email_or_contact)
+
+        # Track site visits on the browser manager so the site-count restart
+        # path actually triggers on long runs (previously never called).
+        if self._bm is not None:
+            try:
+                self._bm.mark_site()
+            except Exception:
+                pass
 
         # Aggregate page context.
         all_html = "\n".join(result.html_by_url.values())
@@ -117,10 +157,16 @@ class WebsiteEnricher:
         all_urls = result.urls_seen
         headers = result.headers or {}
 
-        emails = clean_emails(extract_emails(all_html, rendered_text=all_text),
-                              self._cfg.get("email", {}).get("max_email_length", 120))
-        out["emails"] = ", ".join(emails) if emails else "N/A"
-        out["email_count"] = len(emails)
+        # Gate email extraction behind `email.enabled` so disabling it actually
+        # stops the emails/email_count columns from being populated.
+        if self._email_enabled:
+            emails = clean_emails(extract_emails(all_html, rendered_text=all_text),
+                                  self._cfg.get("email", {}).get("max_email_length", 120))
+            out["emails"] = ", ".join(emails) if emails else "N/A"
+            out["email_count"] = len(emails)
+        else:
+            out["emails"] = "N/A"
+            out["email_count"] = 0
 
         soc = detect_social_links(all_html, all_urls)
         out.update(soc)
@@ -153,11 +199,43 @@ class WebsiteEnricher:
             out["website_failure_reason"] = ""
         return out
 
+    def _site_paced_fetch(self, url: str) -> FetchResult:
+        """Fetch with an optional randomized delay between site requests.
+
+        Applies `delays.site_min_seconds`/`site_max_seconds` (previously dead
+        config) while staying thread-safe across the enrichment pool.
+        """
+        import time as _time
+        if self._site_max > 0:
+            with self._sleep_lock:
+                now = _time.time()
+                if self._last_fetch_ts:
+                    elapsed = now - self._last_fetch_ts
+                    want = random.uniform(self._site_min, self._site_max)
+                    if elapsed < want:
+                        _time.sleep(want - elapsed)
+                self._last_fetch_ts = _time.time()
+        fr = self._fetcher.fetch(url)
+        if fr.failure_reason and not fr.html and self._playwright_enabled and self._bm:
+            fr = self._playwright_fetch(url)
+        return fr
+
     def _playwright_fetch(self, url: str) -> FetchResult:
         """Escalate to Playwright for a JS-required/blocked page."""
         try:
             ctx = self._bm.new_context()
             page = ctx.new_page()
+            # Bound browser-tab concurrency to `concurrency.playwright_workers`.
+            with self._pw_sem:
+                return self._playwright_scrape(ctx, page, url)
+        except Exception as e:
+            log.debug("playwright fallback failed %s: %s", url, e)
+            return FetchResult(url=url, website_status="LIVE",
+                               failure_reason=FailureReason.JS_REQUIRED)
+
+    def _playwright_scrape(self, ctx, page, url: str) -> FetchResult:
+        """Run the browser fetch (page already opened) under the semaphore."""
+        try:
             page.set_default_timeout(self._cfg.get("website", {}).get(
                 "page_navigation_timeout_seconds", 30.0) * 1000)
             try:

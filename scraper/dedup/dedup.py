@@ -37,7 +37,8 @@ def resolve_identity(record: dict, default_country: str = "US") -> dict:
     domain = canonical_domain(raw_url) if raw_url != "N/A" else ""
     phone = normalize_phone(record.get("phone"), default_country)
     city = normalize_text(record.get("city")).lower()
-    place_id = (record.get("place_id") or "").strip() or None
+    raw_pid = (record.get("place_id") or "").strip()
+    place_id = None if (not raw_pid or raw_pid.upper() == "N/A") else raw_pid
 
     signals = {
         "place_id": place_id,
@@ -119,3 +120,24 @@ class IdentityResolver:
 
     def _seen_domain_city(self) -> set[str]:
         return self._domain_city
+
+    def rollback(self, record: dict) -> None:
+        """Remove a record's identity signals from the seen sets.
+
+        Used when a record is later rejected/filtered so a legitimate
+        re-discovery of the same business later in the same run is not wrongly
+        dropped as a duplicate (the rejected-record dedup leak).
+        """
+        sig = resolve_identity(record, self._default_country)
+        key = sig["identity_key"]
+        domain = sig["canonical_domain"]
+        phone = sig["normalized_phone"]
+        city = sig["city"]
+        if key:
+            self._identities.discard(key)
+        if domain:
+            self._domains.discard(domain)
+            if city:
+                self._domain_city.discard(f"{domain}|{city}")
+        if phone:
+            self._phones.discard(phone)

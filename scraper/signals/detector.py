@@ -180,34 +180,36 @@ DEFAULT_SIGNALS: dict[str, dict] = {
 
 class SignalDetector:
     def __init__(self, custom_signals: dict | None = None):
+        # `_custom` is read-only after construction; run-time results use local
+        # dicts so concurrent `run()` calls (thread-pool enrichment) never share
+        # mutable state — which previously attributed signals to the wrong site.
         self._custom = custom_signals or {}
-        self._outcome: dict[str, str] = {}
-        self._evidence: dict[str, str] = {}
 
     def run(self, ctx: PageContext) -> tuple[dict[str, str], dict[str, str]]:
         """Run all enabled built-in + custom detectors over a PageContext.
 
         Returns (outcome_fields, evidence). Outcome values are 'YES'/'NO';
-        evidence holds the detector's human-readable reason for YES.
+        evidence holds the detector's human-readable reason for YES. Both dicts
+        are freshly allocated per call, making the detector thread-safe.
         """
-        self._outcome = {}
-        self._evidence = {}
+        outcome: dict[str, str] = {}
+        evidence: dict[str, str] = {}
         for name, spec in DEFAULT_SIGNALS.items():
-            detected, evidence = spec["fn"](ctx)
+            detected, ev = spec["fn"](ctx)
             for field in spec["fields"]:
-                self._outcome[field] = "YES" if detected else "NO"
-            if detected and evidence:
-                self._evidence[name] = evidence
+                outcome[field] = "YES" if detected else "NO"
+            if detected and ev:
+                evidence[name] = ev
 
         for name, spec in self._custom.items():
             if not isinstance(spec, dict) or not spec.get("enabled", True):
                 continue
-            detected, evidence = self._eval_custom(spec, ctx)
-            self._outcome[f"signal_{name}"] = "YES" if detected else "NO"
-            if detected and evidence:
-                self._evidence[name] = evidence
+            detected, ev = self._eval_custom(spec, ctx)
+            outcome[f"signal_{name}"] = "YES" if detected else "NO"
+            if detected and ev:
+                evidence[name] = ev
 
-        return self._outcome, self._evidence
+        return outcome, evidence
 
     def _eval_custom(self, spec: dict, ctx: PageContext) -> tuple[bool, str | None]:
         keywords = spec.get("keywords", []) or []

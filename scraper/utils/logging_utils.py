@@ -96,6 +96,14 @@ def setup_logging(log_dir: str | Path, level: int = logging.INFO) -> logging.Log
     console.setFormatter(_NoConsoleFmt())
     root.addHandler(console)
 
+    # httpx logs every HTTP request/response at INFO level; that floods the
+    # terminal ("INFO: HTTP Request: GET ..."). Raise its threshold to WARNING
+    # so the operator sees only job progress, not per-request HTTP chatter.
+    for noisy in ("httpx", "httpcore", "httpx.client", "httpx._client"):
+        _h = logging.getLogger(noisy)
+        _h.setLevel(logging.WARNING)
+        _h.propagate = True
+
     file_path = log_dir / "scraper.log"
     fileh = logging.FileHandler(file_path, encoding="utf-8")
     fileh.setLevel(logging.DEBUG)  # keep full detail in the file

@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from scraper.dedup import IdentityResolver, resolve_identity
-from scraper.maps.collector import _with_region
+from scraper.maps.collector import _with_region, parse_google_maps_url
 from scraper.signals.detector import PageContext, SignalDetector
-from scraper.utils.normalize import normalize_phone
+from scraper.utils.normalize import normalize_email, normalize_phone
 
 
 # --- 2.1 place_id "N/A" must not collide ------------------------------------
@@ -120,3 +120,54 @@ class TestRejectedRecordRollback:
         r.rollback(business)
         dup2, _, _ = r.is_duplicate(business)
         assert dup2 is False
+
+
+# --- CSV data-quality fixes (audit-follow-up) -------------------------------
+class TestEmailQuoteStrip:
+    def test_leading_quote_stripped(self):
+        assert normalize_email("'infonedallas@myidealdental.com") == \
+            "infonedallas@myidealdental.com"
+
+    def test_case_and_space_normalized(self):
+        assert normalize_email("  Dr@Clinic.COM  ") == "dr@clinic.com"
+
+
+class TestLatLngTokenFallback:
+    def test_place_url_3d_4d_coords(self):
+        u = ("https://www.google.com/maps/place/Dental/@32.7,-96.7,17z/"
+             "data=!4m6!3m5!1s0x0:0x1!8m2!3d32.7767!4d-96.7970")
+        out = parse_google_maps_url(u)
+        assert out.get("lat") == 32.7767
+        assert out.get("lng") == -96.7970
+
+    def test_viewport_at_coords(self):
+        u = "https://www.google.com/maps/@33.0,-97.0,14z"
+        out = parse_google_maps_url(u)
+        assert out.get("lat") == 33.0 and out.get("lng") == -97.0
+
+
+class TestQualityGateCrossRowEmail:
+    def test_same_email_across_rows_not_a_duplicate(self):
+        # The quality gate should treat a shared inbox across businesses as
+        # legitimate; only a repeated email WITHIN one row is a glitch.
+        from scraper.validation.quality import run_quality_gate
+        import tempfile, csv as _csv, pathlib
+        tmp = tempfile.mkdtemp()
+        out_dir = pathlib.Path(tmp)
+        # Build a minimal CSV with two rows sharing one email.
+        import scraper.models as M
+        cols = M.OUTPUT_COLUMNS
+        path = out_dir / "out.csv"
+        recs = [
+            {"business_name": "A", "website": "https://a.example", "emails": "same@example.com"},
+            {"business_name": "B", "website": "https://b.example", "emails": "same@example.com"},
+        ]
+        with open(path, "w", newline="") as fh:
+            w = _csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            for rc in recs:
+                w.writerow({c: rc.get(c, "N/A") for c in cols})
+        report = run_quality_gate(out_dir)
+        # duplicate_emails must PASS (ok=True) for cross-row shared email.
+        dup_check = next(c for c in report.checks if c["check"] == "duplicate_emails")
+        assert dup_check["ok"] is True

@@ -33,6 +33,17 @@ from .websites.enricher import WebsiteEnricher
 
 log = logging.getLogger(__name__)
 
+# Google Maps `gl` region code -> a display country name, used to fill the
+# `country` column when Maps does not expose one on the place page.
+_GL_COUNTRY = {
+    "us": "United States", "uk": "United Kingdom", "gb": "United Kingdom",
+    "ca": "Canada", "au": "Australia", "nz": "New Zealand",
+    "de": "Germany", "fr": "France", "nl": "Netherlands", "ae": "United Arab Emirates",
+    "in": "India", "pk": "Pakistan", "sg": "Singapore", "ie": "Ireland",
+}
+_GL_COUNTRY_UPPER = {k.upper(): v for k, v in _GL_COUNTRY.items()}
+_GL_COUNTRY.update(_GL_COUNTRY_UPPER)
+
 
 class Pipeline:
     def __init__(self, cfg: dict, maps_collector=None, browser_manager=None):
@@ -311,7 +322,13 @@ class Pipeline:
         d["city"] = normalize_text(raw.get("city"))
         d["state"] = normalize_text(raw.get("state"))
         d["postal_code"] = normalize_text(raw.get("postal_code"))
-        d["country"] = normalize_text(raw.get("country"))
+        # Country: Google Maps place pages rarely expose a standalone country
+        # field; infer it from the region (`gl`) when missing so the column is
+        # not left all-"N/A". Mapping covers the common target regions.
+        country = normalize_text(raw.get("country"))
+        if not country or country == "N/A":
+            country = _GL_COUNTRY.get(self.cfg.get("maps", {}).get("gl", ""), "N/A")
+        d["country"] = country
         d["latitude"] = raw.get("latitude") or "N/A"
         d["longitude"] = raw.get("longitude") or "N/A"
         d["google_maps_url"] = raw.get("google_maps_url") or "N/A"

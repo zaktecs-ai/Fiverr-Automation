@@ -220,10 +220,20 @@ def _guess_country_code(digits: str, default_country: str) -> str:
 
 
 def normalize_email(raw: str) -> str:
-    """Lowercase and strip whitespace from an email address."""
+    """Lowercase and strip whitespace + stray quote characters from an email.
+
+    Extraction can capture a leading/trailing HTML attribute quote (e.g.
+    `'infonedallas@myidealdental.com`); strip those so the stored email is clean.
+    A single quote/snippet must not wrap a legitimate address in the CSV.
+    """
     if not raw:
         return ""
-    return str(raw).strip().lower()
+    s = str(raw).strip().lower()
+    # Strip one or more leading/trailing quote characters (' " ) — these are
+    # HTML/attribute artifacts, never a valid part of the address.
+    s = s.lstrip("'\"")
+    s = s.rstrip("'\"")
+    return s
 
 
 # ---------------------------------------------------------------------------

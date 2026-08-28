@@ -143,6 +143,22 @@ class BrowserManager:
 
     def close(self) -> None:
         self._close()
+        # Playwright's sync API registers asyncio callbacks that can raise
+        # "Exception in callback SyncBase._sync.<lambda>" at interpreter teardown
+        # once the greenlet/loop is already gone. Draining the loop here (best
+        # effort, after the browser + Playwright are stopped) flushes those
+        # pending callbacks so they don't spray ERROR lines after the job ends.
+        try:
+            import asyncio as _aio
+            try:
+                loop = _aio.get_event_loop()
+            except (RuntimeError, _aio.CoroutineNotAllowedError):  # pragma: no cover
+                loop = None
+            if loop is not None and loop.is_running() is False and \
+                    not loop.is_closed():
+                loop.run_until_complete(_aio.sleep(0))
+        except Exception:  # pragma: no cover - teardown hygiene, never fatal
+            pass
 
     @property
     def browser(self):

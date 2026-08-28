@@ -169,6 +169,13 @@ def parse_google_maps_url(url: str) -> dict:
     if m:
         out["lat"] = float(m.group(1))
         out["lng"] = float(m.group(2))
+    # Google Maps place pages carry coordinates as !3d<lat>!4d<lng> tokens when
+    # the /maps/@lat,lng viewport form is absent. Capture that as a fallback so
+    # latitude/longitude are not left empty for place URLs.
+    m3 = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", url or "")
+    if m3 and "lat" not in out:
+        out["lat"] = float(m3.group(1))
+        out["lng"] = float(m3.group(2))
     return out
 
 

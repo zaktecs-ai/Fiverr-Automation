@@ -80,7 +80,6 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
 
             domains: dict[str, str] = {}
             phones: dict[str, str] = {}
-            emails_seen: dict[str, str] = {}
             duplicate_domain = False
             duplicate_phone = False
             duplicate_email = False
@@ -101,14 +100,18 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
                         duplicate_phone = True
                     phones[p] = row.get("business_name", "")
 
-                # Duplicate-email check: each individual email should appear at most once.
+                # Duplicate-email check: a single row repeating the SAME email is
+                # a data glitch; the same email shared across DIFFERENT rows is
+                # legitimate (a shared inbox / agency address), not a duplicate.
+                # We dedupe within the row so a repeated token isn't a false FAIL.
                 emails = (row.get("emails") or "").split(",")
+                seen_row: set[str] = set()
                 for e in emails:
                     e = normalize_email(e).strip()
                     if e and e != "N/A":
-                        if e in emails_seen:
+                        if e in seen_row:
                             duplicate_email = True
-                        emails_seen[e] = row.get("business_name", "")
+                        seen_row.add(e)
 
                 ok, _ = validate_email_field(row.get("emails"))
                 if not ok:

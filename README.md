@@ -89,7 +89,12 @@ The engine:
 1. **validates** your config (and aborts with a clear message if anything is
    wrong),
 2. **detects any existing checkpoint** and resumes if present,
-3. streams progress to the terminal and `scraper.log`.
+3. streams **plain-English progress** to the terminal (which search is running,
+   each business found, and how many were exported) plus full detail in
+   `scraper.log`.
+
+To run it in the **background** (survive SSH disconnects), use `tmux` — see
+**`docs/RUN_WITH_TMUX.md`** for a plain-English guide.
 
 ---
 
@@ -166,6 +171,7 @@ mocks — no live Google Maps needed.
 ├── GUIDE.md                # plain-English config guide
 ├── docs/architecture.md    # design decisions
 ├── docs/VNC_SETUP.md       # visible-screen + CAPTCHA walkthrough
+├── docs/RUN_WITH_TMUX.md   # background running + reading progress
 ├── scraper/
 │   ├── config.py           # config load + validation
 │   ├── models.py           # schema + status model

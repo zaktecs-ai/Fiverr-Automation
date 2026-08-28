@@ -105,29 +105,57 @@ class Pipeline:
         self._counter_offset = self.store.committed_count()
 
     # ------------------------------------------------------------------
+    def _progress(self, line: str) -> None:
+        """Print a clean, human-readable progress line (no log prefix/IDs).
+
+        Written straight to the terminal so an operator watching a tmux session
+        sees a simple running tally: which query is in progress, how many records
+        have been found/exported, and when the run finishes.
+        """
+        print(line, flush=True)
+
     def run(self) -> None:
         queries = list(self.cfg["queries"])
-        self.summary.set("total_queries", len(queries))
+        total = len(queries)
+        self.summary.set("total_queries", total)
         remaining = self.store.remaining_queries(queries)
         self.summary.set("remaining_queries", len(remaining))
         # Recovered records: those already committed.
         self.summary.set("recovered_records", self.store.committed_count())
 
-        log.info("job start: %d queries, %d already done, %d committed records",
-                 len(queries), len(queries) - len(remaining), self.store.committed_count())
+        already_done = total - len(remaining)
+        client = self.cfg["job"].get("client_name", "default")
 
-        for query in queries:
+        self._progress("=" * 58)
+        self._progress(f"  B2B LEAD SCRAPER  —  {client}")
+        self._progress(f"  Total searches : {total}")
+        self._progress(f"  Already done   : {already_done}")
+        self._progress(f"  To do now      : {len(remaining)}")
+        self._progress("=" * 58)
+
+        for idx, query in enumerate(queries, 1):
             if self.store.query_status(query) == "done":
-                log.checkpoint("query already completed, skipping: %s", query)
+                self._progress(f"[{idx}/{total}] SKIP (already done)  {query}")
                 continue
-            self._process_query(query)
+            self._process_query(query, idx, total)
 
         # Finalize.
         self.csv.close()
         self._finalize()
 
+        s = self.summary.to_dict()
+        self._progress("=" * 58)
+        self._progress("  DONE.")
+        self._progress(f"  Records exported : {s['final_exported_records']}")
+        self._progress(f"  Duplicates removed: {s['duplicates_removed']}")
+        self._progress(f"  Filtered out     : {s['filtered_out']}")
+        self._progress(f"  Queries completed: {s['completed_queries']}/{total}")
+        self._progress("=" * 58)
+
     # ------------------------------------------------------------------
-    def _process_query(self, query: str) -> None:
+    def _process_query(self, query: str, qidx: int = 0, qtotal: int = 0) -> None:
+        tag = f"[{qidx}/{qtotal}] " if qtotal else ""
+        self._progress(f"{tag}RUNNING  {query}")
         log.info("processing query: %s", query)
         self.store.set_query_status(query, "running")
 
@@ -136,6 +164,11 @@ class Pipeline:
             for raw in self.maps.collect(query):
                 self.summary.bump("businesses_discovered")
                 rec = self._normalize_maps(raw)
+                # Live per-record tally (what the operator asked to see).
+                name = rec.data.get("business_name") or "?"
+                self._progress(
+                    f"    + found #{self.summary.stats['businesses_discovered']}: "
+                    f"{name}")
                 # Early dedup.
                 is_dup, reason, sig = self.resolver.is_duplicate(rec.data)
                 if is_dup:
@@ -189,6 +222,12 @@ class Pipeline:
         self.summary.bump("completed_queries")
         self.store.write_json_mirror()
         self._recycle_browser_if_needed(query)
+
+        s = self.summary.to_dict()
+        tag = f"[{qidx}/{qtotal}] " if qtotal else ""
+        self._progress(
+            f"{tag}DONE     {query}  →  discovered {s['businesses_discovered']}, "
+            f"exported {s['final_exported_records']}")
 
     def _apply_post_filters(self, records: list[BusinessRecord]) -> None:
         """Re-check enrichment-dependent filters; reject records that fail.

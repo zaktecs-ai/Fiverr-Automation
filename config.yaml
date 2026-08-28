@@ -137,10 +137,6 @@ email:
   # DNS MX check (does the domain accept email)? Optional; adds a small delay.
   enable_mx_check: false
 
-  # Optical character recognition for emails hidden inside images.
-  # OFF by default — it is slow. Only turn on for targeted needs.
-  enable_ocr: false
-
 
 # ---------------------------------------------------------------------------
 # SMTP  —  direct email verification (OPTIONAL, off by default).
@@ -166,9 +162,6 @@ smtp:
 # CONCURRENCY  —  how many things run at once. Lower = safer on 12 GB RAM.
 # ---------------------------------------------------------------------------
 concurrency:
-  # Simultaneous Google Maps browser tabs. Safe range: 1–4. Recommended: 2.
-  google_maps_workers: 2
-
   # Simultaneous website HTTP fetches. Safe range: 1–8.
   # The engine uses very little RAM per worker (~1%), so on a 12 GB VPS 6–8 is
   # safe and roughly 2x faster than 4 — same data, same requests, just parallel.

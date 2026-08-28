@@ -5,6 +5,7 @@ assigned a value; unavailable data gets the configured missing-value ("N/A").
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,6 +69,8 @@ def _to_cell(value, missing: str) -> str:
     if value is None or value == "":
         return missing
     if isinstance(value, float):
+        if not math.isfinite(value):  # NaN/inf → missing, not "nan"/"inf"
+            return missing
         return repr(value)
     if isinstance(value, bool):
         return "true" if value else "false"

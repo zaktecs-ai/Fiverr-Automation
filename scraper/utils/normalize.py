@@ -6,6 +6,7 @@ deduplication and validation.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 import unicodedata
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
@@ -30,6 +31,22 @@ _REDUNDANT_PARAM_RE = re.compile(r"^(redirect|url|target|goto|next|return|dest|c
 
 def _strip_accents(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
+def _is_bare_ipv6_host(netloc: str) -> bool:
+    """True when a netloc is a bare IPv6 literal (multiple colons, no brackets
+    and no explicit port). Bracketed hosts, userinfo, and host:port pairs are
+    excluded."""
+    if not netloc or netloc.startswith("[") or "@" in netloc:
+        return False
+    # A bare IPv6 literal is the entire netloc with no ":port" suffix.
+    if netloc.count(":") < 2:
+        return False
+    try:
+        ipaddress.IPv6Address(netloc)
+        return True
+    except ValueError:
+        return False
 
 
 def normalize_text(value) -> str:
@@ -69,6 +86,15 @@ def normalize_url(raw: str) -> str:
     if scheme not in ("http", "https"):
         return "N/A"
 
+    # A bare IPv6 literal (multiple colons, no brackets) is technically invalid
+    # in a URL: `urlsplit(…).hostname` truncates it to the first hextet and
+    # `.port` raises ValueError. Re-wrap the whole authority in brackets so the
+    # host parses as a single IPv6 address (no port is present in this form).
+    netloc = parts.netloc
+    if _is_bare_ipv6_host(netloc):
+        raw = urlunsplit((scheme, f"[{netloc}]", parts.path, parts.query, parts.fragment))
+        parts = urlsplit(raw)
+
     host = (parts.hostname or "").lower()
     if not host:
         return "N/A"
@@ -84,12 +110,21 @@ def normalize_url(raw: str) -> str:
             if candidate and candidate.lower().startswith(("http://", "https://")):
                 return normalize_url(candidate)
 
-    # Drop the default port for the scheme.
-    port = parts.port
-    netloc = host
+    # Drop the default port for the scheme. Guard the port access: empty ports
+    # (e.g. "http://host:") raise ValueError, which must not crash the pipeline
+    # or quality gate. In that case treat the port as absent (scheme default).
+    port = None
+    try:
+        port = parts.port
+    except ValueError:
+        port = None  # malformed/absent port → keep scheme default
+    # Rebuild the netloc. IPv6 hosts must be re-bracketed (urlunsplit does not
+    # bracket them), and only a non-default port is appended.
+    is_ipv6 = ":" in host
+    netloc = f"[{host}]" if is_ipv6 else host
     if port is not None:
         if not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
-            netloc = f"{host}:{port}"
+            netloc = f"{netloc}:{port}"
 
     # Strip tracking / redundant params.
     kept = []
@@ -133,6 +168,14 @@ def canonical_domain(host: str) -> str:
     host = (host or "").lower().strip().strip(".")
     if not host:
         return ""
+    # An IP-address host is its own identity — do not label-split it. (Splitting
+    # '1.1.1.1' into its last two labels produced the garbage key '1.1', which
+    # corrupted dedup domain+city keys and the MX email-verification domain.)
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
     labels = host.split(".")
     _2ND_LEVEL = {  # second-level domain under a country code TLD
         "co", "com", "org", "net", "gov", "edu", "ac", "me", "ltd", "plc",

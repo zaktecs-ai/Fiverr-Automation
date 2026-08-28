@@ -33,7 +33,6 @@ class BrowserManager:
         self._pw = None
         self._browser = None
         self._queries_processed = 0
-        self._sites_processed = 0
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -109,9 +108,6 @@ class BrowserManager:
     def mark_query(self) -> None:
         self._queries_processed += 1
 
-    def mark_site(self) -> None:
-        self._sites_processed += 1
-
     def should_restart(self) -> bool:
         if self._restart_after_queries and self._queries_processed >= self._restart_after_queries:
             return True
@@ -124,7 +120,6 @@ class BrowserManager:
                 return False
             self._close()
             self._queries_processed = 0
-            self._sites_processed = 0
             return True
 
     def _close(self) -> None:

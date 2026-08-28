@@ -204,6 +204,7 @@ class Pipeline:
                         reason_text = "website_missing"
                     rec.set("filtered_out_reason", reason_text)
                     self.store.set_stage(rec_id, "filtered")
+                    self._rollback_identity(rec)  # pre-filter rejection must undo dedup registration (see #1)
                     self._append_row(self.filtered_path, rec.data)
                     self.summary.bump("filtered_out")
                     continue

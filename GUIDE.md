@@ -105,7 +105,6 @@ email:
   enabled: true
   max_email_length: 120
   enable_mx_check: false
-  enable_ocr: false
 ```
 
 | Setting | What it means |
@@ -113,7 +112,6 @@ email:
 | `enabled` | `true` = collect emails from websites. |
 | `max_email_length` | Longest email to trust (characters). Longer ones are usually fake/junk. |
 | `enable_mx_check` | `true` = also check the domain's mail server exists (DNS). Adds a small delay. |
-| `enable_ocr` | `true` = try to read emails hidden inside images. **Slow** — leave `false` unless needed. |
 
 ---
 
@@ -138,14 +136,12 @@ This is about **not exhausting your VPS's 12 GB RAM**.
 
 ```yaml
 concurrency:
-  google_maps_workers: 2
   website_workers: 4
   playwright_workers: 2
 ```
 
 | Setting | What it means | Recommended |
 |---------|---------------|-------------|
-| `google_maps_workers` | Maps browser tabs at once. | `2` |
 | `website_workers` | Website requests at once. | `4` |
 | `playwright_workers` | Browser-based website fetches at once (RAM-hungry). | `2` |
 

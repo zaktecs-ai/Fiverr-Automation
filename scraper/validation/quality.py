@@ -38,7 +38,6 @@ def run_quality_gate(output_dir: str | Path, checkpoint_store=None,
     report = QualityReport()
     columns = expected_columns or OUTPUT_COLUMNS
 
-    csv_path = output_dir / "checkpoint.json"  # not the csv; resolve below
     # Determine the CSV filename from run_summary or directory listing.
     csv_file = _find_csv(output_dir)
 

@@ -166,14 +166,6 @@ class WebsiteEnricher:
                                enable_sitemap=self._enable_sitemap)
         result = crawler.crawl(url, fetch_fn, _has_required_email_or_contact)
 
-        # Track site visits on the browser manager so the site-count restart
-        # path actually triggers on long runs (previously never called).
-        if self._bm is not None:
-            try:
-                self._bm.mark_site()
-            except Exception:
-                pass
-
         # Aggregate page context.
         all_html = "\n".join(result.html_by_url.values())
         all_text = "\n".join(result.text_by_url.values())

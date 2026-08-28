@@ -19,11 +19,10 @@ def _minimal_cfg(**overrides):
                     "http_read_timeout_seconds": 20.0,
                     "page_navigation_timeout_seconds": 30.0},
         "email": {"enabled": True, "max_email_length": 120,
-                  "enable_mx_check": False, "enable_ocr": False},
+                  "enable_mx_check": False},
         "smtp": {"enabled": False, "workers": 3, "retries": 1,
                  "connection_timeout_seconds": 10, "verification_timeout_seconds": 20},
-        "concurrency": {"google_maps_workers": 2, "website_workers": 4,
-                        "playwright_workers": 2},
+        "concurrency": {"website_workers": 4, "playwright_workers": 2},
         "delays": {"maps_min_seconds": 2.0, "maps_max_seconds": 5.0,
                    "site_min_seconds": 0.5, "site_max_seconds": 1.5,
                    "cooldown_seconds": 60.0},
@@ -66,6 +65,23 @@ class TestValidation:
         with pytest.raises(ConfigError) as e:
             validate_config(cfg)
         assert "Recommended" in str(e.value) or "recommended" in str(e.value)
+
+    def test_dead_knobs_ignored(self):
+        # google_maps_workers / enable_ocr were validated-but-dead knobs and are
+        # now removed; a config that still (harmlessly) contains them must pass,
+        # and the engine must not depend on them.
+        cfg = _minimal_cfg()
+        cfg["concurrency"]["google_maps_workers"] = 2
+        cfg["email"]["enable_ocr"] = False
+        validate_config(cfg)  # should not raise
+
+    def test_removed_knobs_not_validated(self):
+        # The validation must no longer have any path referencing the dead keys.
+        import inspect
+        from scraper import config as cfg_mod
+        src = inspect.getsource(cfg_mod.validate_config)
+        assert "google_maps_workers" not in src
+        assert "enable_ocr" not in src
 
 
 class TestLoadConfig:

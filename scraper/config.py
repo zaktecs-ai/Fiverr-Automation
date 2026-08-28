@@ -201,7 +201,6 @@ def validate_config(cfg: dict) -> None:
     check(_bool, email, "enabled")
     check(_int_in, email, "max_email_length", 10, 300, "120")
     check(_bool, email, "enable_mx_check")
-    check(_bool, email, "enable_ocr")
 
     check(_bool, smtp, "enabled")
     check(_int_in, smtp, "workers", 1, 8, "3")
@@ -210,12 +209,11 @@ def validate_config(cfg: dict) -> None:
     check(_int_in, smtp, "verification_timeout_seconds", 1, 120, "20")
 
     for key, default_range in {
-        "google_maps_workers": (1, 4),
         "website_workers": (1, 8),
         "playwright_workers": (1, 4),
     }.items():
         check(_int_in, concurrency, key, default_range[0], default_range[1],
-              {"google_maps_workers": "2", "website_workers": "4", "playwright_workers": "2"}[key])
+              {"website_workers": "4", "playwright_workers": "2"}[key])
 
     # delay
     delay = cfg.get("delays", {})

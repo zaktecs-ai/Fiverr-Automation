@@ -97,8 +97,11 @@ website:
   enable_sitemap: true
 
   # Maximum pages visited per website. Keeps enrichment fast and bounded.
-  # Safe range: 1–50. Recommended: 8.
-  max_pages_per_site: 8
+  # General-purpose sweet spot: homepage + contact + one relevant page reaches
+  # the lead signals (email/social/phone) for ANY business type. 3–4 is enough;
+  # deeper pages rarely add signals and only cost time.
+  # Safe range: 1–50. Recommended: 3.
+  max_pages_per_site: 3
 
   # Hard cap on total time spent on ONE website (seconds). Prevents one slow
   # site from freezing the job. Recommended: 120.
@@ -166,8 +169,11 @@ concurrency:
   # Simultaneous Google Maps browser tabs. Safe range: 1–4. Recommended: 2.
   google_maps_workers: 2
 
-  # Simultaneous website HTTP fetches. Safe range: 1–8. Recommended: 4.
-  website_workers: 4
+  # Simultaneous website HTTP fetches. Safe range: 1–8.
+  # The engine uses very little RAM per worker (~1%), so on a 12 GB VPS 6–8 is
+  # safe and roughly 2x faster than 4 — same data, same requests, just parallel.
+  # Recommended: 8.
+  website_workers: 8
 
   # Simultaneous Playwright (browser) website fetches. Safe range: 1–4.
   # Recommended: 2 — browser tabs use a LOT of RAM.
@@ -182,9 +188,10 @@ delays:
   maps_min_seconds: 2
   maps_max_seconds: 5
 
-  # Random pause between website fetches (seconds).
-  site_min_seconds: 0.5
-  site_max_seconds: 1.5
+  # Random pause between website fetches (seconds). Still polite to sites, but
+  # kept tight so it doesn't dominate runtime on large jobs.
+  site_min_seconds: 0.3
+  site_max_seconds: 0.8
 
   # Extra pause when the engine detects a block/challenge (seconds).
   cooldown_seconds: 60

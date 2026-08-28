@@ -71,10 +71,33 @@ def detect_social_links(html: str, urls: list[str]) -> dict[str, str]:
 
 
 def _has_required_email_or_contact(text_by_url: dict) -> bool:
-    """Crawl stopping heuristic: stop once an email or contact info is present."""
+    """Crawl stopping heuristic: stop early once lead-valuable signals are found.
+
+    General-purpose (category-agnostic): as soon as we have an email, OR contact
+    info, OR a social profile, OR a decisiv booking/chat signal, we have enough
+    to enrich — there's no need to keep crawling deep pages. This is what keeps
+    the per-site crawl small without losing data quality.
+    """
     joined = " ".join(text_by_url.values())
-    return bool(re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", joined)) and \
-        bool(re.search(r"(contact|email|tel:|@)", joined, re.I))
+    if not joined.strip():
+        return False
+    # Email present -> enough (with or without a surrounding marker).
+    if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", joined):
+        return True
+    # Social profile present -> strong signal on its own.
+    if re.search(
+        r"(facebook\.com|instagram\.com|linkedin\.com|youtube\.com|"
+        r"(twitter\.com|x\.com)/|tiktok\.com|pinterest\.com)",
+        joined, re.I):
+        return True
+    # Decisive business signals (booking/chat/financing — any category).
+    if re.search(
+        r"(calendly\.com|acuityscheduling\.com|booksy\.com|tawk\.to|intercom|"
+        r"livechatinc\.com|setmore\.com|financing|payment plan|book now|book online)",
+        joined, re.I):
+        return True
+    # Contact info (phone/tel/contact form) is a useful middle-tier signal.
+    return bool(re.search(r"(contact|tel:|email us|call us)", joined, re.I))
 
 
 class WebsiteEnricher:

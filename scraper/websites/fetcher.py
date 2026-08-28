@@ -71,7 +71,7 @@ def classify_html_block(html: str) -> str | None:
 
 class WebsiteFetcher:
     def __init__(self, *, connect_timeout: float = 10.0, read_timeout: float = 20.0,
-                 proxy: httpx.Proxy | None = None, max_redirects: int = 5,
+                 proxy: httpx.Proxy | None = None, max_redirects: int = 3,
                  retries: int = 1, retry_base_delay: float = 1.0):
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout

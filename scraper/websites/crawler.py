@@ -19,9 +19,13 @@ from urllib.parse import urljoin, urlparse
 
 log = logging.getLogger(__name__)
 
+# Priority pages are intentionally FEW and general-purpose (category-agnostic):
+# we only chase the handful of pages that carry lead-valuable signals (contact,
+# about, services). Any business — dentist, plumber, lawyer, med spa — puts its
+# email/phone/social on these. Deeper paths (team, pricing, booking, locations)
+# almost never add signals, so we drop them to save requests/time.
 _DEFAULT_PRIORITY = ["", "/contact", "/contact-us", "/about", "/about-us",
-                     "/services", "/team", "/staff", "/our-team", "/locations",
-                     "/pricing", "/book", "/booking", "/book-now"]
+                     "/services", "/service", "/services/"]
 
 _KEYWORD_HINTS = {
     "contact": re.compile(r"(contact|get.?in.?touch|reach?.?us)", re.I),
@@ -45,7 +49,7 @@ class CrawlResult:
 
 
 class SmartCrawler:
-    def __init__(self, *, max_pages: int = 8, overall_timeout: float = 120.0,
+    def __init__(self, *, max_pages: int = 4, overall_timeout: float = 120.0,
                  enable_sitemap: bool = True, page_priority: list[str] | None = None):
         self._max_pages = max_pages
         self._overall_timeout = overall_timeout
@@ -141,24 +145,29 @@ class SmartCrawler:
     def _discover_sitemap_urls(self, base_url: str, fetch_fn) -> list[str]:
         """Fetch sitemap.xml / robots sitemap and return relevant internal URLs."""
         origin = _origin(base_url)
+        # Try one sitemap first; only fall to the index if the plain one fails.
+        # (Fetching BOTH every site is expensive — 2 requests per site for a
+        # discovery that rarely adds lead signals.) Cap discovery small too.
         candidates = [urljoin(base_url, "/sitemap.xml"),
                       urljoin(base_url, "/sitemap_index.xml")]
         urls: list[str] = []
+        cap = max(2, self._max_pages)  # a handful of relevant pages at most
         for sm in candidates:
             try:
                 fr = fetch_fn(sm)
                 xml = getattr(fr, "html", "") or getattr(fr, "text", "") or ""
-                if "<urlset" not in xml and "<sitemapindex" not in xml:
+                is_xml = ("<urlset" in xml) or ("<sitemapindex" in xml)
+                if not is_xml:
                     continue
-                # Extract <loc> entries.
                 locs = re.findall(r"<loc>\s*(.*?)\s*</loc>", xml, re.I)
                 for loc in locs:
-                    if _origin(loc) == origin:
+                    if _origin(loc) == origin and not urlparse(loc).path.endswith(".xml"):
                         urls.append(loc)
-                    # cap discovery
-                    if len(urls) >= self._max_pages * 3:
-                        return urls
-                break
+                    if len(urls) >= cap:
+                        break
+                # Only fetch the second sitemap variant if the first found nothing.
+                if urls:
+                    break
             except Exception:
                 continue
         # Rank sitemap URLs toward contact/about/services.

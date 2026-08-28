@@ -164,12 +164,29 @@ def validate_config(cfg: dict) -> None:
     check(_bool, maps, "include_permanently_closed")
     for key in ("browser_restart_after_queries", "scroll_delay_min_ms", "scroll_delay_max_ms"):
         check(_int_in, maps, key, 0, 1_000_000, "3 / 800-1600")
+    # Visible-screen mode: headless can be toggled; nav timeout is used by the
+    # collector + browser manager.
+    if maps.get("headless") is not None:
+        check(_bool, maps, "headless")
+    check(_int_in, maps, "page_navigation_timeout_ms", 1000, 300_000, "30000", optional=True)
     # hl/gl are two-letter language/region codes.
     for key in ("hl", "gl"):
         v = maps.get(key)
         if v is not None and (not isinstance(v, str) or len(v.strip()) != 2):
             errors.append(f"ERROR: maps.{key} must be a 2-letter code (e.g. 'en', 'us').\n"
                           f"Current value: {v!r}")
+
+    # --- vnc (visible Scraper Engine screen for manual CAPTCHA) ---
+    vnc = cfg.get("vnc", {})
+    if isinstance(vnc, dict):
+        disp = vnc.get("display")
+        if disp is not None and (not isinstance(disp, str) or not re.match(r"^:\d+$", disp)):
+            errors.append(f"ERROR: vnc.display must look like ':2' (a colon + number).\n"
+                          f"Current value: {disp!r}")
+        port = vnc.get("port")
+        if port is not None and (not isinstance(port, int) or port < 1024 or port > 65535):
+            errors.append(f"ERROR: vnc.port must be a port number between 1024 and 65535.\n"
+                          f"Current value: {port!r}")
 
     check(_int_in, website, "max_pages_per_site", 1, 50, "5-10")
     check(_int_in, website, "overall_site_timeout_seconds", 5, 600, "90-120")

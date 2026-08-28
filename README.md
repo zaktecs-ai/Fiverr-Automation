@@ -106,6 +106,21 @@ outages, and `Ctrl-C`.
 
 ---
 
+## Visible screen + manual CAPTCHA (TightVNC)
+
+By default the browser runs invisibly (`maps.headless: true`). To **watch it
+live** and **solve CAPTCHAs by hand**, switch on a separate virtual screen:
+
+1. `./vnc-screen.sh` — starts a dedicated screen (display `:2`, non-common port
+   `43873`) that never touches your existing `:1` screen.
+2. Set `maps.headless: false` in `config.yaml`.
+3. `python main.py` — the browser appears on that screen.
+4. Connect TightVNC to `YOUR-VPS-IP:43873` and click the CAPTCHA when it shows.
+
+See **`docs/VNC_SETUP.md`** for the full plain-English walkthrough.
+
+---
+
 ## Output files
 
 Everything lands in `output/<client_name>/`:
@@ -146,9 +161,11 @@ mocks — no live Google Maps needed.
 ├── .env.example            # secrets template (copy to .env)
 ├── requirements.txt
 ├── setup.sh
+├── vnc-screen.sh           # visible Scraper Engine screen (TightVNC)
 ├── README.md
 ├── GUIDE.md                # plain-English config guide
 ├── docs/architecture.md    # design decisions
+├── docs/VNC_SETUP.md       # visible-screen + CAPTCHA walkthrough
 ├── scraper/
 │   ├── config.py           # config load + validation
 │   ├── models.py           # schema + status model

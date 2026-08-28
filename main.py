@@ -58,6 +58,7 @@ def main(argv=None) -> int:
         headless=maps_cfg.get("headless", True),
         proxy=proxy_manager.playwright_proxy(),
         nav_timeout_ms=int(maps_cfg.get("page_navigation_timeout_ms", 30_000)),
+        display=cfg.get("vnc", {}).get("display") if not maps_cfg.get("headless", True) else None,
     )
 
     limits = cfg.get("job", {})
@@ -71,6 +72,9 @@ def main(argv=None) -> int:
         cooldown_seconds=cfg.get("delays", {}).get("cooldown_seconds", 0.0),
         hl=maps_cfg.get("hl", "en"),
         gl=maps_cfg.get("gl", "us"),
+        nav_timeout_ms=int(maps_cfg.get("page_navigation_timeout_ms", 30_000)),
+        maps_delay=(float(cfg.get("delays", {}).get("maps_min_seconds", 0.0)),
+                    float(cfg.get("delays", {}).get("maps_max_seconds", 0.0))),
     )
 
     from scraper.pipeline import Pipeline

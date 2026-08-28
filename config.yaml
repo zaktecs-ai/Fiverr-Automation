@@ -191,6 +191,28 @@ delays:
 
 
 # ---------------------------------------------------------------------------
+# VNC  —  a visible "Scraper Engine" screen for watching the browser and
+#         solving CAPTCHAs by hand. Only used when `maps.headless: false`.
+# ---------------------------------------------------------------------------
+#  The engine launches its browser on a separate virtual screen (Xtightvnc
+#  display `:2`) which you watch through TightVNC and use to solve a CAPTCHA
+#  when Google challenges the bot. This screen is INDEPENDENT of any other VNC
+#  screen already on the VPS (the common one is display `:1`, port 5901).
+vnc:
+  # The X display number for the Scraper Engine screen. Keep ":2" (separate from
+  # the existing ":1"). X11 uses port 6002 automatically for this display.
+  display: ":2"
+
+  # The VNC port TightVNC uses to reach this screen. Pick a port that is NOT a
+  # common/default one and does NOT conflict with the existing VNC screen.
+  # 5902 would be the "textbook" value; we use the non-common 43873 on purpose.
+  port: 43873
+
+  # Optional display resolution (width x height in pixels).
+  resolution: "1366x900"
+
+
+# ---------------------------------------------------------------------------
 # PROXY  —  DISABLED by default (you don't have proxies yet).
 # ---------------------------------------------------------------------------
 #  Leave this alone. When you add proxies later, fill in `.env` and flip

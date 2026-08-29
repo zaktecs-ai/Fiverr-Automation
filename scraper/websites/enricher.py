@@ -176,7 +176,8 @@ class WebsiteEnricher:
         # stops the emails/email_count columns from being populated.
         if self._email_enabled:
             emails = clean_emails(extract_emails(all_html, rendered_text=all_text),
-                                  self._cfg.get("email", {}).get("max_email_length", 120))
+                                  self._cfg.get("email", {}).get("max_email_length", 120),
+                                  website_url=url)
             out["emails"] = ", ".join(emails) if emails else "N/A"
             out["email_count"] = len(emails)
         else:
@@ -221,15 +222,22 @@ class WebsiteEnricher:
         config) while staying thread-safe across the enrichment pool.
         """
         import time as _time
+        sleep_time = 0.0
         if self._site_max > 0:
+            # Compute the required delay and update the shared clock UNDER the
+            # lock, then sleep OUTSIDE it. Sleeping while holding the lock
+            # serialized the whole enrichment thread pool and destroyed
+            # concurrency (every worker waited on every other worker's pause).
             with self._sleep_lock:
                 now = _time.time()
                 if self._last_fetch_ts:
                     elapsed = now - self._last_fetch_ts
                     want = random.uniform(self._site_min, self._site_max)
                     if elapsed < want:
-                        _time.sleep(want - elapsed)
+                        sleep_time = want - elapsed
                 self._last_fetch_ts = _time.time()
+        if sleep_time > 0:
+            _time.sleep(sleep_time)
         fr = self._fetcher.fetch(url)
         if fr.failure_reason and not fr.html and self._playwright_enabled and self._bm:
             fr = self._playwright_fetch(url)

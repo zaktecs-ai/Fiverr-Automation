@@ -233,6 +233,11 @@ class Pipeline:
         self.store.set_query_status(query, "done")
         self.summary.bump("completed_queries")
         self.store.write_json_mirror()
+        # Snapshot the SQLite checkpoint after every completed query so a
+        # mid-run crash that corrupts the main DB can recover from the backup,
+        # rather than losing the whole run (previously the .bak was only
+        # written at job end).
+        self.store.backup_checkpoint()
         self._recycle_browser_if_needed(query)
 
         s = self.summary.to_dict()

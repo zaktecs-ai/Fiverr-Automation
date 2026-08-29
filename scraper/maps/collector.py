@@ -475,10 +475,23 @@ class MapsCollector:
             listing_links = self._extract_listing_links(page)
             log.info("query '%s': found %d listing place URLs", query, len(listing_links))
 
-            # Fail-closed: a non-empty search that yields 0 listing links means
-            # the collector is broken, NOT that the query has no results. Attach
-            # a diagnostic snippet so the log explains *what* was on the page.
+            # A genuinely empty result set is distinct from a broken collector.
+            # Distinguish them on explicit "no results" copy so a legitimately
+            # empty query is marked done (and never re-retried forever) while a
+            # selector-drift / interstitial / bot-challenge still fails closed.
             if not listing_links:
+                try:
+                    body_text = page.locator("body").inner_text(timeout=2000).lower()
+                except Exception:
+                    body_text = ""
+                if "we could not find any results" in body_text or \
+                        "no results found" in body_text:
+                    log.info("query '%s' has genuinely no results — marking done", query)
+                    return
+                # Fail-closed: a non-empty search that yields 0 listing links,
+                # with no explicit "no results" copy, means the collector is
+                # broken, NOT that the query is empty. Attach a diagnostic
+                # snippet so the log explains *what* was on the page.
                 raise ZeroListingsError(query, _page_diagnostic(page))
 
             for place_url in listing_links:

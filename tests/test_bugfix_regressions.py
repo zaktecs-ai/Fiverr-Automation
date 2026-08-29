@@ -223,3 +223,69 @@ class TestQualityGateCrossRowEmail:
         # duplicate_emails must PASS (ok=True) for cross-row shared email.
         dup_check = next(c for c in report.checks if c["check"] == "duplicate_emails")
         assert dup_check["ok"] is True
+
+
+# --- Round 2: email domain-relationship filter is now wired (dead code fixed)
+class TestCleanEmailsWithWebsiteContext:
+    def test_dummy_email_with_real_website_filtered_out(self):
+        # An email whose domain differs from the website AND carries a
+        # suspicious placeholder word must be rejected when website_url is
+        # supplied. (Regression: website_url was never passed, so this filter
+        # was dead code and placeholder emails leaked through.)
+        from scraper.email.extract import clean_emails
+        # "info@yoursite.com" — domain not the website, "yoursite" is suspicious.
+        candidates = ["info@yoursite.com"]
+        out = clean_emails(candidates, max_length=120,
+                           website_url="https://smiledental.com")
+        assert len(out) == 0
+
+    def test_legit_email_survives_with_website_context(self):
+        from scraper.email.extract import clean_emails
+        # Matches the website domain — always kept.
+        out = clean_emails(["hello@smiledental.com"], max_length=120,
+                           website_url="https://smiledental.com")
+        assert out == ["hello@smiledental.com"]
+
+
+# --- Round 2: _site_paced_fetch must not hold the lock while sleeping -------
+class TestSitePacedFetchLockRelease:
+    def test_site_paced_fetch_does_not_hold_lock_while_sleeping(self):
+        from unittest import mock
+        import threading
+        import scraper.websites.enricher as enricher_mod
+
+        class _Fetcher:
+            def __init__(self):
+                self.calls = []
+            def fetch(self, url):
+                self.calls.append(url)
+                return enricher_mod.FetchResult(url=url, html="ok",
+                                                failure_reason="")
+
+        enricher = enricher_mod.WebsiteEnricher.__new__(enricher_mod.WebsiteEnricher)
+        enricher._site_min = 0.1
+        enricher._site_max = 0.2
+        # Seed a prior fetch so the pacing window is entered (a falsy 0.0 would
+        # skip the elapsed computation entirely).
+        enricher._last_fetch_ts = 50.0
+        enricher._sleep_lock = threading.Lock()
+        enricher._fetcher = _Fetcher()
+
+        sleep_calls = []
+        lock_held_during_sleep = []
+
+        def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            # If _sleep_lock is held here, the lock leak is present.
+            lock_held_during_sleep.append(enricher._sleep_lock.locked())
+
+        # Deterministic clock + pacing window: elapsed = 0.05 < want = 0.15.
+        with mock.patch("time.sleep", side_effect=fake_sleep), \
+             mock.patch("time.time", side_effect=[50.05, 50.05]), \
+             mock.patch("scraper.websites.enricher.random.uniform", return_value=0.15):
+            enricher._site_paced_fetch("https://x.example")
+
+        assert len(sleep_calls) == 1
+        assert sleep_calls[0] > 0
+        # The lock must NOT be held while sleeping.
+        assert lock_held_during_sleep == [False]

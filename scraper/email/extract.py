@@ -97,8 +97,14 @@ def extract_emails(html: str | None, rendered_text: str = "", url: str = "") -> 
     return candidates
 
 
-def clean_emails(candidates: list[str], max_length: int = 120) -> list[str]:
-    """Apply the static cleaning pipeline; returns only usable emails, ordered."""
+def clean_emails(candidates: list[str], max_length: int = 120,
+                 website_url: str | None = None) -> list[str]:
+    """Apply the static cleaning pipeline; returns only usable emails, ordered.
+
+    When `website_url` is supplied, the domain-relationship filter runs: an
+    email whose domain differs from the website (and is not a known personal
+    provider) carrying a suspicious word is rejected.
+    """
     out: list[str] = []
     seen: set[str] = set()
     for c in candidates:
@@ -106,6 +112,6 @@ def clean_emails(candidates: list[str], max_length: int = 120) -> list[str]:
         if not e or e in seen:
             continue
         seen.add(e)
-        if is_usable_email(e, max_length):
+        if is_usable_email(e, max_length, website_url):
             out.append(e)
     return out

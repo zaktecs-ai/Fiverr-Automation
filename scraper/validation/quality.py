@@ -77,8 +77,8 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
             report.add("header_integrity", header == columns,
                        f"expected {len(columns)} cols, got {len(header)}")
 
-            domains: dict[str, str] = {}
-            phones: dict[str, str] = {}
+            domains: dict[str, set[str]] = {}   # domain -> set of place_ids seen
+            phones: dict[str, set[str]] = {}    # phone  -> set of place_ids seen
             duplicate_domain = False
             duplicate_phone = False
             duplicate_email = False
@@ -89,15 +89,27 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
             for row in reader:
                 w = row.get("website", "")
                 d = canonical_domain(normalize_url(w)) if (w and w != "N/A") else ""
-                if d:
-                    if d in domains:
-                        duplicate_domain = True
-                    domains[d] = row.get("business_name", "")
                 p = normalize_phone(row.get("phone", ""))
-                if p and p != "N/A":
-                    if p in phones:
+                if p == "N/A":
+                    p = ""
+                pid = (row.get("place_id") or "").strip()
+                pid = pid if pid and pid != "N/A" else f"__no_pid_{row.get('business_name', '')}__"
+
+                # A domain/phone is a real duplicate only when the same value
+                # recurs on two rows that ALSO share the same place identity.
+                # Distinct place_ids (or missing place_id with distinct names)
+                # are distinct listings — a chain sharing a corporate domain or
+                # a franchise sharing a front-desk line is legitimate, not a dup.
+                if d:
+                    ids = domains.setdefault(d, set())
+                    if pid in ids:
+                        duplicate_domain = True
+                    ids.add(pid)
+                if p:
+                    ids = phones.setdefault(p, set())
+                    if pid in ids:
                         duplicate_phone = True
-                    phones[p] = row.get("business_name", "")
+                    ids.add(pid)
 
                 # Duplicate-email check: a single row repeating the SAME email is
                 # a data glitch; the same email shared across DIFFERENT rows is

@@ -104,16 +104,22 @@ class CheckpointStore:
         """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT identity_key, canonical_domain, normalized_phone, city "
+                "SELECT identity_key, canonical_domain, normalized_phone, city, place_id "
                 "FROM records WHERE stage='committed'"
             ).fetchall()
         self._identities: set[str] = {r["identity_key"] for r in rows if r["identity_key"]}
         self._domains: set[str] = {r["canonical_domain"] for r in rows if r["canonical_domain"]}
-        self._phones: set[str] = {r["normalized_phone"] for r in rows if r["normalized_phone"]}
+        # The phone and domain+city fallback sets must mirror the resolver's
+        # rule: they only capture place_id-LESS records, because a place_id is
+        # authoritative and a shared phone/domain across place_id'd records is a
+        # legit multi-location chain, not a duplicate. Seeding them from
+        # place_id'd rows here would re-introduce the false-merge on resume.
+        no_pid = [r for r in rows if not r["place_id"]]
+        self._phones: set[str] = {r["normalized_phone"] for r in no_pid if r["normalized_phone"]}
         # domain+city combos for multi-location dedup.
         self._domain_city: set[str] = {
             f"{r['canonical_domain']}|{r['city'].lower()}"
-            for r in rows if r["canonical_domain"] and r["city"]
+            for r in no_pid if r["canonical_domain"] and r["city"]
         }
 
     def has_identity(self, key: str) -> bool:

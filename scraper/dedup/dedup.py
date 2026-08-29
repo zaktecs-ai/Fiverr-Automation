@@ -93,28 +93,40 @@ class IdentityResolver:
         key = sig["identity_key"]
         domain = sig["canonical_domain"]
         phone = sig["normalized_phone"]
+        place_id = sig["place_id"]
+        city = sig["city"]
 
         if key and key in self._identities:
             return True, f"duplicate_identity:{sig['key_type']}", sig
 
-        # Secondary guard: same domain AND same city implies same branch listing.
-        city = sig["city"]
-        if domain and city:
-            domain_city_key = f"{domain}|{city}"
-            if domain_city_key in self._seen_domain_city():
-                return True, "duplicate_domain+city", sig
+        # A Google place_id is authoritative: a record that carries one is
+        # uniquely identified by it. Shared phone / domain+city must NOT merge
+        # two listings that carry different place_ids — a franchise front-desk
+        # line or a shared corporate domain is common, and collapsing them
+        # silently drops a real business (a false merge). So the weaker
+        # phone / domain+city fallback guards apply — and register — ONLY for
+        # records that LACK a place_id (the genuinely ambiguous case where
+        # those signals are the strongest remaining evidence). A place_id
+        # record never poisons the fallback sets, and a place_id-less record
+        # sharing a phone with a place_id record is left as a distinct listing
+        # rather than merged on a weak, possibly-shared signal.
+        if place_id is None:
+            if domain and city:
+                domain_city_key = f"{domain}|{city}"
+                if domain_city_key in self._domain_city:
+                    return True, "duplicate_domain+city", sig
+            if phone and phone in self._phones:
+                return True, "duplicate_phone", sig
 
-        if phone and phone in self._phones:
-            return True, "duplicate_phone", sig
-
-        # Record as seen (first valid record wins).
+        # Record as seen (first valid record wins). Only place_id-less records
+        # feed the fallback sets, mirroring the guard logic above.
         if key:
             self._identities.add(key)
         if domain:
             self._domains.add(domain)
-            if city:
+            if city and place_id is None:
                 self._domain_city.add(f"{domain}|{city}")
-        if phone:
+        if phone and place_id is None:
             self._phones.add(phone)
         return False, "", sig
 

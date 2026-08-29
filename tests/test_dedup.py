@@ -58,3 +58,35 @@ class TestIdentityResolver:
         dup, _, _ = r.is_duplicate(_rec(place_id=None, website=None,
                                         city="Houston"))
         assert dup is True
+
+    def test_distinct_place_id_same_phone_not_merged(self):
+        # A franchise front-desk line shared by two locations must not merge
+        # them: distinct place_ids are authoritative evidence of distinct
+        # listings. (Regression: previously a shared phone falsely merged them.)
+        r = IdentityResolver()
+        dup, _, _ = r.is_duplicate(_rec(place_id="0xAAA", website=None,
+                                        phone="214-555-0000"))
+        assert dup is False
+        dup, reason, _ = r.is_duplicate(_rec(place_id="0xBBB", website=None,
+                                             phone="214-555-0000"))
+        assert dup is False
+
+    def test_distinct_place_id_same_domain_city_not_merged(self):
+        # Two branches of a chain in the SAME city sharing one corporate domain
+        # are distinct listings when their place_ids differ.
+        r = IdentityResolver()
+        dup, _, _ = r.is_duplicate(_rec(place_id="0xCCC", city="Dallas"))
+        assert dup is False
+        dup, reason, _ = r.is_duplicate(_rec(place_id="0xDDD", city="Dallas",
+                                             phone="214-555-0001"))
+        assert dup is False
+
+    def test_place_id_record_does_not_poison_phone_fallback(self):
+        # A place_id-less record sharing a phone with an earlier place_id record
+        # must not be merged: the shared phone is weak evidence, and the
+        # place_id-bearing record was already uniquely identified.
+        r = IdentityResolver()
+        r.is_duplicate(_rec(place_id="0xEEE", website=None))
+        dup, _, _ = r.is_duplicate(_rec(place_id=None, website=None,
+                                        city="Houston"))
+        assert dup is False

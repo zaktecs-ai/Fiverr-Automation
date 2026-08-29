@@ -316,7 +316,13 @@ class Pipeline:
         d["business_name"] = normalize_text(raw.get("business_name"))
         d["category"] = normalize_text(raw.get("category"))
         d["subcategory"] = normalize_text(raw.get("subcategory"))
-        d["phone"] = normalize_phone(raw.get("phone")) if raw.get("phone") else "N/A"
+        # Phone must be country-aware so the stored value matches the identity
+        # key used by dedup (both derive from country.default). Previously the
+        # default country was ignored here, so a non-US job stored a US-coded
+        # phone that no longer matched its own dedup key on resume.
+        d["phone"] = normalize_phone(
+            raw.get("phone"), self.cfg.get("country", {}).get("default", "US")
+        ) if raw.get("phone") else "N/A"
         d["website"] = normalize_url(raw.get("website")) if raw.get("website") else "N/A"
         d["address"] = normalize_text(raw.get("address", raw.get("full_address")))
         d["full_address"] = normalize_text(raw.get("full_address"))

@@ -48,3 +48,23 @@ class TestQualityGate:
     def test_no_csv_means_not_passed(self, tmp_path):
         report = run_quality_gate(tmp_path)
         assert report.passed is False
+
+    def test_chain_distinct_place_ids_not_flagged(self, tmp_path):
+        # Two branches sharing a corporate domain and a front-desk phone are a
+        # legitimate multi-location chain when their place_ids differ — the
+        # gate must NOT flag them as duplicate domains/phones. (Regression:
+        # previously any shared normalized domain/phone was flagged FAIL.)
+        _write_csv(tmp_path, [
+            _row(place_id="0xAAA", city="Dallas"),
+            _row(place_id="0xBBB", city="Houston"),
+        ])
+        report = run_quality_gate(tmp_path)
+        assert report.passed is True, report.issues
+
+    def test_duplicate_place_id_domain_still_flagged(self, tmp_path):
+        # The same listing (same place_id) repeated with the same domain is a
+        # genuine duplicate and must still be flagged.
+        row = _row(place_id="0xAAA")
+        _write_csv(tmp_path, [row, row])
+        report = run_quality_gate(tmp_path)
+        assert any("domain" in i or "phone" in i for i in report.issues)

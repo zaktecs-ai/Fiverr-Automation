@@ -56,6 +56,58 @@ class TestPhonePrefixNotDoubled:
         assert a == b == "12145551234"
 
 
+# --- 2.3 pipeline stores phone with country.default (was defaulting to US) ---
+class TestPipelinePhoneUsesCountryDefault:
+    def test_non_us_default_reaches_stored_phone(self):
+        # The pipeline's _normalize_maps must pass country.default through to
+        # normalize_phone so the stored value matches the dedup identity key.
+        # (Regression: it called normalize_phone(raw) with no country arg,
+        # which hard-coded US and broke dedup/resume for non-US jobs.)
+        from scraper.pipeline import Pipeline
+
+        class _Maps:
+            def collect(self, query):
+                yield {"business_name": "London Dentist",
+                       "phone": "020 7946 0958",
+                       "website": "https://example.co.uk",
+                       "source_query": query}
+                if False:
+                    yield {}
+
+        class _StoreStop(Exception):
+            pass
+
+        cfg = {
+            "job": {"client_name": "c", "output_filename": "c",
+                    "output_dir": "/tmp/pw_test_out", "max_results_per_query": 0,
+                    "max_total_results": 0},
+            "resolved_output_dir": "/tmp/pw_test_out",
+            "queries": ["dentists in London"],
+            "missing_value": "N/A",
+            "country": {"default": "GB"},
+            "maps": {"gl": "uk"},
+            "website": {"require_website": False},
+            "email": {"enabled": False},
+            "smtp": {"enabled": False},
+            "concurrency": {"website_workers": 1},
+            "signals": {},
+            "filters": {},
+        }
+        import scraper.pipeline as pm
+        # Call the normalize step directly without a full Pipeline (avoids
+        # CheckpointStore/threading side effects).
+        p = pm.Pipeline.__new__(pm.Pipeline)
+        p.cfg = cfg
+        rec = p._normalize_maps({"business_name": "London Dentist",
+                                 "phone": "020 7946 0958",
+                                 "website": "https://example.co.uk",
+                                 "source_query": "dentists in London"})
+        assert rec.data["phone"] == "4402079460958"
+        # And it must match the dedup identity key's phone.
+        sig = resolve_identity(rec.data, default_country="GB")
+        assert sig["normalized_phone"] == rec.data["phone"]
+
+
 # --- 4.9 social links never cross columns -----------------------------------
 class TestSocialLinkColumns:
     def test_facebook_not_in_instagram(self):

@@ -44,7 +44,8 @@ class TestCheckpointStore:
     def test_resume_reloads_seen_sets_committed_only(self, tmp_path):
         path = tmp_path / "ck.db"
         s1 = CheckpointStore(path)
-        s1.register_record("id1", "key1", "pid1", "example.com", "12145551234",
+        # A place_id-LESS record: its phone/domain belong in the fallback sets.
+        s1.register_record("id1", "key1", "", "example.com", "12145551234",
                            "Dallas", "q1", "{}")
         s1.set_stage("id1", "accepted")
         s1.mark_committed("id1", 0)
@@ -54,6 +55,21 @@ class TestCheckpointStore:
         assert s2.has_identity("key1")
         assert s2.has_domain("example.com")
         assert s2.has_phone("12145551234")
+
+    def test_resume_place_id_record_does_not_poison_fallback_sets(self, tmp_path):
+        # A place_id-bearing record is uniquely identified by its place_id, so
+        # its phone/domain+city must NOT enter the fallback dedup sets. A later
+        # place_id-less record sharing the phone must not be falsely merged.
+        path = tmp_path / "ck.db"
+        s1 = CheckpointStore(path)
+        s1.register_record("id1", "key_pid", "pid1", "example.com", "12145551234",
+                           "Dallas", "q1", "{}")
+        s1.mark_committed("id1", 0)
+        s1.close()
+
+        s2 = CheckpointStore(path)
+        assert s2.has_identity("key_pid")          # identity key still reloads
+        assert s2.has_phone("12145551234") is False  # fallback set not poisoned
 
     def test_counters(self, tmp_path):
         s = CheckpointStore(tmp_path / "ck.db")

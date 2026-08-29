@@ -195,6 +195,21 @@ class CheckpointStore:
             )
             self._conn.commit()
 
+    def bump_query_count(self, query: str, column: str, amount: int = 1) -> None:
+        """Increment a per-query tally (`discovered` or `committed`).
+
+        These columns existed in the schema but were never written, so the
+        `queries` table always reported 0/0 even for completed queries.
+        """
+        if column not in ("discovered", "committed"):
+            return
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE queries SET {column} = {column} + ? WHERE query = ?",
+                (amount, query),
+            )
+            self._conn.commit()
+
     def remaining_queries(self, all_queries: list[str]) -> list[str]:
         return [q for q in all_queries if self.query_status(q) != "done"]
 

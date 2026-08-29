@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..models import OUTPUT_COLUMNS
-from ..utils.normalize import canonical_domain, normalize_email, normalize_phone, normalize_url
+from ..utils.normalize import extract_domain, normalize_email, normalize_phone, normalize_url
 from ..validation.validate import validate_email_field
 
 
@@ -88,7 +88,10 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
 
             for row in reader:
                 w = row.get("website", "")
-                d = canonical_domain(normalize_url(w)) if (w and w != "N/A") else ""
+                # extract_domain() yields the bare registrar-level domain (host)
+                # — same fix as dedup: canonical_domain() on a full URL string
+                # produced garbage keys and broke the duplicate-domain check.
+                d = extract_domain(normalize_url(w)) if (w and w != "N/A") else ""
                 p = normalize_phone(row.get("phone", ""))
                 if p == "N/A":
                     p = ""

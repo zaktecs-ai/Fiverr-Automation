@@ -152,6 +152,10 @@ class Pipeline:
 
         # Finalize.
         self.csv.close()
+        # Reflect the run's true end-state: after all queries are processed,
+        # nothing remains. (Previously remaining_queries kept its start-of-run
+        # value, so a completed job misleadingly reported "remaining: 3".)
+        self.summary.set("remaining_queries", 0)
         self._finalize()
 
         s = self.summary.to_dict()
@@ -174,6 +178,7 @@ class Pipeline:
         try:
             for raw in self.maps.collect(query):
                 self.summary.bump("businesses_discovered")
+                self.store.bump_query_count(query, "discovered", 1)
                 rec = self._normalize_maps(raw)
                 # Live per-record tally (what the operator asked to see).
                 name = rec.data.get("business_name") or "?"
@@ -276,6 +281,10 @@ class Pipeline:
             row_index = self.csv.append(rec.data)
             self.store.mark_committed(rec.get("record_id"), row_index)
             self.store.set_stage(rec.get("record_id"), "committed")
+            # Per-query committed tally (previously always 0).
+            q = rec.data.get("source_query")
+            if q:
+                self.store.bump_query_count(q, "committed", 1)
             self.summary.bump("final_exported_records")
 
     def _recycle_browser_if_needed(self, query: str) -> None:
@@ -401,6 +410,10 @@ class Pipeline:
     def _enrich_one(self, rec: BusinessRecord, website: str) -> dict:
         self.summary.bump("websites_processed")
         rich = self.enricher.enrich(website)
+        # Track email extraction counters (previously dead stats that always
+        # reported 0 despite emails being found in the CSV).
+        self.summary.bump("emails_found", int(rich.get("email_count", 0) or 0))
+        self.summary.bump("emails_rejected", int(rich.get("_emails_rejected", 0) or 0))
         # Track status stats.
         status = rich.get("website_status")
         if status == WebsiteStatus.LIVE:
@@ -420,6 +433,7 @@ class Pipeline:
         evidence = {}
         if rich:
             evidence = rich.pop("_evidence", {})
+            rich.pop("_emails_rejected", None)  # internal counter, not a schema field
             for k, v in rich.items():
                 rec.set(k, v)
         # Retain signal evidence for auditability (logged, not in CSV).

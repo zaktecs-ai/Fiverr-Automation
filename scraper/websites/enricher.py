@@ -175,14 +175,19 @@ class WebsiteEnricher:
         # Gate email extraction behind `email.enabled` so disabling it actually
         # stops the emails/email_count columns from being populated.
         if self._email_enabled:
-            emails = clean_emails(extract_emails(all_html, rendered_text=all_text),
+            raw_candidates = extract_emails(all_html, rendered_text=all_text)
+            emails = clean_emails(raw_candidates,
                                   self._cfg.get("email", {}).get("max_email_length", 120),
                                   website_url=url)
             out["emails"] = ", ".join(emails) if emails else "N/A"
             out["email_count"] = len(emails)
+            # Internal counter: candidates that were cleaned away, so the
+            # pipeline can report emails_rejected (previously a dead stat).
+            out["_emails_rejected"] = len(raw_candidates) - len(emails)
         else:
             out["emails"] = "N/A"
             out["email_count"] = 0
+            out["_emails_rejected"] = 0
 
         soc = detect_social_links(all_html, all_urls)
         out.update(soc)

@@ -243,6 +243,15 @@ def _guess_country_code(digits: str, default_country: str) -> str:
     international (1 + NANP), while a 10-digit number is a local number that
     should gain the "1".
     """
+    # North-American Numbering Plan resolution MUST come before the foreign
+    # prefix match. A 10-digit number under a US/CA default is unambiguously a
+    # local NANP number (NANP local numbers are exactly 10 digits) and gains the
+    # leading "1". Running the foreign-prefix loop first let a 10-digit Houston
+    # number like "3462023432" match Spain's "34" and be left uncoded.
+    if len(digits) == 11 and digits.startswith("1"):
+        return "1"  # already international (1 + NANP)
+    if (default_country or "").upper() in ("US", "CA") and len(digits) == 10:
+        return "1"  # local NANP number -> gain the leading country code
     # Longest-match against explicit international prefixes (skip the bare "1",
     # which is too ambiguous to be a reliable prefix by itself).
     for code in sorted(set(_COUNTRY_CODES.values()), key=len, reverse=True):
@@ -250,14 +259,6 @@ def _guess_country_code(digits: str, default_country: str) -> str:
             continue
         if digits.startswith(code):
             return code
-    # An 11-digit number starting with "1" is already international (1 + NANP):
-    # unambiguous regardless of the default country.
-    if len(digits) == 11 and digits.startswith("1"):
-        return "1"
-    # North-American Numbering Plan: a 10-digit number is a local NANP number
-    # that should gain the leading "1" so +1-214… and 214… normalize identically.
-    if (default_country or "").upper() in ("US", "CA") and len(digits) == 10:
-        return "1"
     # Unprefixed local number: use the default country's code.
     return _COUNTRY_CODES.get((default_country or "").upper(), "")
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 
 from ..utils.normalize import (
-    canonical_domain,
+    extract_domain,
     normalize_phone,
     normalize_text,
     normalize_url,
@@ -34,7 +34,12 @@ def resolve_identity(record: dict, default_country: str = "US") -> dict:
     """Compute identity signals + a composite key for a record dict."""
     name = normalize_text(record.get("business_name"))
     raw_url = normalize_url(record.get("website", ""))
-    domain = canonical_domain(raw_url) if raw_url != "N/A" else ""
+    # Extract the registrar-level domain from the (already normalized) URL.
+    # canonical_domain() expects a bare hostname; passing it the full URL string
+    # produced a garbage key like "https://host/path" and silently broke the
+    # domain+city dedup fallback. extract_domain() does hostname extraction then
+    # canonicalization and is the correct helper here.
+    domain = extract_domain(raw_url) if raw_url != "N/A" else ""
     phone = normalize_phone(record.get("phone"), default_country)
     city = normalize_text(record.get("city")).lower()
     raw_pid = (record.get("place_id") or "").strip()

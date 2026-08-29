@@ -276,6 +276,27 @@ class TestEmailCounters:
         assert len(raw) - len(kept) == 1
 
 
+# --- Round 4: asyncio/Playwright teardown noise silenced --------------------
+class TestAsyncioNoiseSilenced:
+    def test_asyncio_logger_quieted_on_setup(self, tmp_path):
+        import logging
+        from scraper.utils.logging_utils import setup_logging
+        lg = logging.getLogger("asyncio")
+        lg.setLevel(logging.NOTSET)  # reset before setup
+        lg.propagate = True
+        setup_logging(tmp_path)
+        # asyncio must be silenced so Playwright teardown callbacks never spam
+        # the terminal/scraper.log.
+        assert lg.level >= logging.ERROR
+
+    def test_recycle_also_drains_playwright_loop(self):
+        # The loop-drain helper must exist on the manager and be invoked by the
+        # per-recycle _close path (regression: only the final close() drained,
+        # so mid-run recycles left stale callbacks that sprayed ERROR lines).
+        import scraper.browser.browser_manager as bm
+        assert hasattr(bm.BrowserManager, "_drain_playwright_loop")
+
+
 # --- Round 2: email domain-relationship filter is now wired (dead code fixed)
 class TestCleanEmailsWithWebsiteContext:
     def test_dummy_email_with_real_website_filtered_out(self):

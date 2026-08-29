@@ -104,6 +104,16 @@ def setup_logging(log_dir: str | Path, level: int = logging.INFO) -> logging.Log
         _h.setLevel(logging.WARNING)
         _h.propagate = True
 
+    # Playwright's sync API can emit "Exception in callback SyncBase._sync" at
+    # teardown via the `asyncio` logger. The engine itself is entirely
+    # synchronous (threads, not asyncio), so no meaningful asyncio diagnostics
+    # are lost by silencing this — it stops residual teardown noise from
+    # spamming the terminal and scraper.log during/after a run.
+    for noisy in ("asyncio",):
+        _h = logging.getLogger(noisy)
+        _h.setLevel(logging.CRITICAL)
+        _h.propagate = False
+
     file_path = log_dir / "scraper.log"
     fileh = logging.FileHandler(file_path, encoding="utf-8")
     fileh.setLevel(logging.DEBUG)  # keep full detail in the file

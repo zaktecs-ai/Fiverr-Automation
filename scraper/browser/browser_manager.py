@@ -135,14 +135,16 @@ class BrowserManager:
             except Exception as e:  # pragma: no cover
                 log.debug("playwright stop error: %s", e)
             self._pw = None
+        # Playwright's sync API registers asyncio callbacks that raise
+        # "Exception in callback SyncBase._sync.<lambda>" once the greenlet/loop
+        # is already gone. Draining the loop here — on EVERY close, not just the
+        # final `close()` — flushes those pending callbacks. Previously only the
+        # job-final close did this, so a mid-run `recycle()` (restart_after_queries)
+        # left stale callbacks that sprayed ERROR lines into the terminal/log.
+        self._drain_playwright_loop()
 
-    def close(self) -> None:
-        self._close()
-        # Playwright's sync API registers asyncio callbacks that can raise
-        # "Exception in callback SyncBase._sync.<lambda>" at interpreter teardown
-        # once the greenlet/loop is already gone. Draining the loop here (best
-        # effort, after the browser + Playwright are stopped) flushes those
-        # pending callbacks so they don't spray ERROR lines after the job ends.
+    def _drain_playwright_loop(self) -> None:
+        """Best-effort flush of Playwright's pending asyncio callbacks."""
         try:
             import asyncio as _aio
             try:
@@ -154,6 +156,9 @@ class BrowserManager:
                 loop.run_until_complete(_aio.sleep(0))
         except Exception:  # pragma: no cover - teardown hygiene, never fatal
             pass
+
+    def close(self) -> None:
+        self._close()
 
     @property
     def browser(self):

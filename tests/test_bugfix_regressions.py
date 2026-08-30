@@ -297,6 +297,28 @@ class TestAsyncioNoiseSilenced:
         assert hasattr(bm.BrowserManager, "_drain_playwright_loop")
 
 
+# --- Round 5: Yext/GBP tracking params stripped from website URLs -----------
+class TestTrackingParamsStripped:
+    def test_yext_params_removed_from_website_url(self):
+        from scraper.utils.normalize import normalize_url
+        url = ("https://northeastdallasdentistry.com"
+               "?sc_cid=GBP:O:GP:746:Organic_Search:General:na"
+               "&_vsrefdom=organic_gbp"
+               "&y_source=1_MTEyNTczNzYtNzE1LWxvY2F0aW9uLndlYnNpdGU=")
+        out = normalize_url(url)
+        assert "sc_cid" not in out
+        assert "_vsrefdom" not in out
+        assert "y_source" not in out
+        assert "?" not in out
+        assert out == "https://northeastdallasdentistry.com"
+
+    def test_legit_query_params_preserved(self):
+        from scraper.utils.normalize import normalize_url
+        # A non-tracking query param (e.g. a real page id) must survive.
+        out = normalize_url("https://example.com/page?lang=en")
+        assert "lang=en" in out
+
+
 # --- Round 2: email domain-relationship filter is now wired (dead code fixed)
 class TestCleanEmailsWithWebsiteContext:
     def test_dummy_email_with_real_website_filtered_out(self):

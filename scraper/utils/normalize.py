@@ -17,6 +17,10 @@ _TRACKING_PARAMS = {
     "utm_id", "gclid", "gclsrc", "dclid", "fbclid", "msclkid", "mc_cid",
     "mc_eid", "igshid", "ref", "ref_src", "source", "cmpid", "_ga",
     "_gl", "yclid", "zanpid", "twclid", "wbraid", "gbraid",
+    # Yext local-SEO / Google Business Profile attribution params that vendors
+    # append to a business's real website URL. They are pure tracking and must
+    # never leak into the stored `website` column.
+    "sc_cid", "_vsrefdom", "y_source",
 }
 
 # Common Google redirect wrappers that resolve to a real destination via `url=`.

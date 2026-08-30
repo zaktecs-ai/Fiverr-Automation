@@ -82,8 +82,12 @@ class TestEmailCleaning:
     def test_dummy_domain_rejected(self):
         assert not is_usable_email("john@example.com")
 
-    def test_dummy_local_rejected(self):
-        assert not is_usable_email("info@realdomain.com")
+    def test_role_local_kept(self):
+        # info@ is a legitimate business contact, not a dummy local part.
+        assert is_usable_email("info@realdomain.com")
+
+    def test_noreply_local_rejected(self):
+        assert not is_usable_email("noreply@realdomain.com")
 
     def test_invalid_syntax_rejected(self):
         assert not is_usable_email("not-an-email")

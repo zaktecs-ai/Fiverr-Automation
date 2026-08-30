@@ -12,8 +12,9 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..dedup import resolve_identity
 from ..models import OUTPUT_COLUMNS
-from ..utils.normalize import extract_domain, normalize_email, normalize_phone, normalize_url
+from ..utils.normalize import normalize_email, normalize_url
 from ..validation.validate import validate_email_field
 
 
@@ -87,16 +88,13 @@ def _check_csv_integrity(csv_path: Path, columns: list[str], report: QualityRepo
             bad_url = False
 
             for row in reader:
-                w = row.get("website", "")
-                # extract_domain() yields the bare registrar-level domain (host)
-                # — same fix as dedup: canonical_domain() on a full URL string
-                # produced garbage keys and broke the duplicate-domain check.
-                d = extract_domain(normalize_url(w)) if (w and w != "N/A") else ""
-                p = normalize_phone(row.get("phone", ""))
-                if p == "N/A":
-                    p = ""
-                pid = (row.get("place_id") or "").strip()
-                pid = pid if pid and pid != "N/A" else f"__no_pid_{row.get('business_name', '')}__"
+                # Single source of truth for identity: reuse the dedup engine's
+                # resolve_identity() so the quality gate and the pipeline can
+                # never drift on what "same business" means.
+                sig = resolve_identity(row)
+                d = sig.get("canonical_domain") or ""
+                p = sig.get("normalized_phone") or ""
+                pid = sig.get("place_id") or f"__no_pid_{row.get('business_name', '')}__"
 
                 # A domain/phone is a real duplicate only when the same value
                 # recurs on two rows that ALSO share the same place identity.

@@ -383,3 +383,123 @@ class TestSitePacedFetchLockRelease:
         assert sleep_calls[0] > 0
         # The lock must NOT be held while sleeping.
         assert lock_held_during_sleep == [False]
+
+
+# --- Round 6 (senior architect): H-04 in/notin comparator --------------------
+class TestInNotinComparator:
+    def test_in_list_matches_member(self):
+        from scraper.filters import FilterEngine
+        e = FilterEngine({"include_all": [{"field": "state", "op": "in",
+                                           "value": ["TX", "CA"]}]})
+        assert e.evaluate({"state": "TX"})[0] is True
+        assert e.evaluate({"state": "NY"})[0] is False
+
+    def test_notin_list(self):
+        from scraper.filters import FilterEngine
+        e = FilterEngine({"include_all": [{"field": "state", "op": "notin",
+                                           "value": ["NY", "CA"]}]})
+        assert e.evaluate({"state": "TX"})[0] is True
+        assert e.evaluate({"state": "CA"})[0] is False
+
+    def test_in_scalar_value_coerced_to_singleton(self):
+        from scraper.filters import FilterEngine
+        e = FilterEngine({"include_all": [{"field": "state", "op": "in",
+                                           "value": "TX"}]})
+        assert e.evaluate({"state": "TX"})[0] is True
+
+
+# --- Round 6 (senior architect): M-01 role emails kept -----------------------
+class TestRoleEmailsKept:
+    def test_info_admin_webmaster_kept(self):
+        from scraper.utils.normalize import is_usable_email
+        assert is_usable_email("info@smiledental.com")
+        assert is_usable_email("admin@smiledental.com")
+        assert is_usable_email("webmaster@smiledental.com")
+
+    def test_noreply_still_rejected(self):
+        from scraper.utils.normalize import is_usable_email
+        assert not is_usable_email("noreply@smiledental.com")
+        assert not is_usable_email("no-reply@smiledental.com")
+
+
+# --- Round 6 (senior architect): L-01 output path safety ---------------------
+class TestOutputPathSafety:
+    def test_traversal_client_name_rejected(self):
+        from scraper.config import validate_config, ConfigError
+
+        def cfg_with(cn):
+            return {
+                "job": {"client_name": cn, "output_filename": cn,
+                        "max_results_per_query": 0, "max_total_results": 0},
+                "queries": ["x in y"],
+                "maps": {"include_permanently_closed": False,
+                         "browser_restart_after_queries": 5,
+                         "scroll_delay_min_ms": 800, "scroll_delay_max_ms": 1600},
+                "website": {"require_website": False, "enable_playwright_fallback": True,
+                            "enable_sitemap": True, "max_pages_per_site": 8,
+                            "overall_site_timeout_seconds": 120,
+                            "http_connect_timeout_seconds": 10.0,
+                            "http_read_timeout_seconds": 20.0,
+                            "page_navigation_timeout_seconds": 30.0},
+                "email": {"enabled": True, "max_email_length": 120, "enable_mx_check": False},
+                "smtp": {"enabled": False, "workers": 3, "retries": 1,
+                         "connection_timeout_seconds": 10, "verification_timeout_seconds": 20},
+                "concurrency": {"website_workers": 4, "playwright_workers": 2},
+                "delays": {"maps_min_seconds": 1.0, "maps_max_seconds": 2.0,
+                           "site_min_seconds": 0.5, "site_max_seconds": 1.5,
+                           "cooldown_seconds": 60.0},
+                "signals": {}, "filters": {},
+            }
+
+        for bad in ("../evil", "a/b", "..", "."):
+            with pytest.raises(ConfigError, match="client_name"):
+                validate_config(cfg_with(bad))
+
+    def test_safe_client_name_accepted(self):
+        from scraper.config import validate_config
+        cfg = {
+            "job": {"client_name": "my_campaign-1", "output_filename": "my_campaign-1",
+                    "max_results_per_query": 0, "max_total_results": 0},
+            "queries": ["x in y"],
+            "maps": {"include_permanently_closed": False,
+                     "browser_restart_after_queries": 5,
+                     "scroll_delay_min_ms": 800, "scroll_delay_max_ms": 1600},
+            "website": {"require_website": False, "enable_playwright_fallback": True,
+                        "enable_sitemap": True, "max_pages_per_site": 8,
+                        "overall_site_timeout_seconds": 120,
+                        "http_connect_timeout_seconds": 10.0,
+                        "http_read_timeout_seconds": 20.0,
+                        "page_navigation_timeout_seconds": 30.0},
+            "email": {"enabled": True, "max_email_length": 120, "enable_mx_check": False},
+            "smtp": {"enabled": False, "workers": 3, "retries": 1,
+                     "connection_timeout_seconds": 10, "verification_timeout_seconds": 20},
+            "concurrency": {"website_workers": 4, "playwright_workers": 2},
+            "delays": {"maps_min_seconds": 1.0, "maps_max_seconds": 2.0,
+                       "site_min_seconds": 0.5, "site_max_seconds": 1.5,
+                       "cooldown_seconds": 60.0},
+            "signals": {}, "filters": {},
+        }
+        # Must not raise.
+        validate_config(cfg)
+
+
+# --- Round 6 (senior architect): H-02 limit_reached state --------------------
+class TestLimitReachedFlag:
+    def test_collector_has_limit_reached_flag_default_false(self):
+        from scraper.maps.collector import MapsCollector
+        c = MapsCollector(browser_manager=None)
+        assert c.limit_reached is False
+
+    def test_summary_has_limit_reached_counter(self):
+        from scraper.export.summary import RunSummary
+        s = RunSummary()
+        assert "limit_reached" in s.stats
+
+
+# --- Round 6 (senior architect): M-05 shared identity primitive --------------
+class TestSharedIdentityPrimitive:
+    def test_quality_gate_uses_resolve_identity(self):
+        # The quality gate must import and use the dedup identity primitive so
+        # the two can never drift.
+        import scraper.validation.quality as q
+        assert hasattr(q, "resolve_identity")

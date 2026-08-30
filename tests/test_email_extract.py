@@ -34,7 +34,9 @@ class TestClean:
     def test_dedup_and_dummy_filtered(self):
         candidates = ["a@x.com", "a@x.com", "b@example.com", "info@x.com"]
         out = clean_emails(candidates)
-        assert out == ["a@x.com"]
+        # "info@x.com" is a legitimate role address (kept); "b@example.com" is a
+        # dummy domain (rejected); the duplicate "a@x.com" is deduped.
+        assert out == ["a@x.com", "info@x.com"]
 
     def test_empty(self):
         assert clean_emails([]) == []

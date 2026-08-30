@@ -161,6 +161,18 @@ def validate_config(cfg: dict) -> None:
     check(_int_in, job, "max_results_per_query", 0, 100_000, "200-1000")
     check(_int_in, job, "max_total_results", 0, 1_000_000, "2000-20000")
 
+    # Output path safety: client_name / output_filename become a filesystem
+    # path. Reject traversal ("..", "/", "\") and non-safe characters so an
+    # untrusted value can never escape the output root directory.
+    for key in ("client_name", "output_filename"):
+        v = job.get(key)
+        if v is None:
+            continue
+        if not isinstance(v, str) or not re.match(r"^[A-Za-z0-9_-]+$", v):
+            errors.append(
+                f"ERROR: job.{key} must contain only letters, numbers, underscore "
+                f"or hyphen (no slashes, dots, or spaces).\nCurrent value: {v!r}")
+
     check(_bool, maps, "include_permanently_closed")
     for key in ("browser_restart_after_queries", "scroll_delay_min_ms", "scroll_delay_max_ms"):
         check(_int_in, maps, key, 0, 1_000_000, "3 / 800-1600")

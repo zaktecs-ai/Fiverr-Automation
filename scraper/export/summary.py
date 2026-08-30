@@ -12,7 +12,7 @@ class RunSummary:
         self.end_ts = None
         self.stats = {
             "total_queries": 0, "completed_queries": 0, "remaining_queries": 0,
-            "queries_failed": 0,
+            "queries_failed": 0, "limit_reached": 0,
             "businesses_discovered": 0, "duplicates_removed": 0, "filtered_out": 0,
             "websites_processed": 0, "websites_live": 0, "websites_dead": 0,
             "websites_blocked": 0, "websites_js_required": 0, "websites_timed_out": 0,

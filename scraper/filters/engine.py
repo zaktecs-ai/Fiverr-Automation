@@ -89,7 +89,9 @@ def _compare(record: dict, cond: dict) -> bool:
         raise ValueError(f"unknown filter op: {op!r} (allowed: {sorted(_OPS)})")
 
     actual = _coerce(_field_value(record, field))
-    expected = _coerce(value)
+    # For membership ops the expected operand is a LIST and must stay a list
+    # (coercing it to a string like "['TX','CA']" broke `in`/`notin`).
+    expected = value if isinstance(value, (list, tuple, set)) else _coerce(value)
 
     if op in (">", "<", ">=", "<="):
         try:
@@ -103,9 +105,12 @@ def _compare(record: dict, cond: dict) -> bool:
     elif op == "!=":
         result = actual != expected
     elif op == "in":
-        result = expected in (actual if isinstance(actual, (list, tuple)) else [actual])
+        # "field in [a, b, c]" -> is the record's value a member of the list?
+        # (Previously reversed AND the list got string-coerced, so it always
+        # failed.)
+        result = actual in (expected if isinstance(expected, (list, tuple, set)) else [expected])
     elif op == "notin":
-        result = expected not in (actual if isinstance(actual, (list, tuple)) else [actual])
+        result = actual not in (expected if isinstance(expected, (list, tuple, set)) else [expected])
     elif op == "contains":
         result = str(expected) in str(actual)
     else:  # "="

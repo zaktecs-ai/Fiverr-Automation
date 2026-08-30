@@ -148,6 +148,14 @@ class Pipeline:
             if self.store.query_status(query) == "done":
                 self._progress(f"[{idx}/{total}] SKIP (already done)  {query}")
                 continue
+            if self.maps is not None and getattr(self.maps, "limit_reached", False):
+                # Global result cap already reached: do not silently process the
+                # rest as success. Mark them explicitly and stop.
+                self._progress(f"[{idx}/{total}] LIMIT REACHED — stopping  {query}")
+                remaining = total - idx + 1
+                self.summary.bump("limit_reached", remaining)
+                self.store.set_query_status(query, "limit_reached")
+                break
             self._process_query(query, idx, total)
 
         # Finalize.

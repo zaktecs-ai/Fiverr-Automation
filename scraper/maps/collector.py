@@ -443,6 +443,9 @@ class MapsCollector:
         self._nav_timeout_ms = nav_timeout_ms
         self._maps_delay = maps_delay
         self._yielded_total = 0
+        # True when the global result cap short-circuited collection, so the
+        # pipeline can report a distinct state instead of a false "done".
+        self.limit_reached = False
 
     def collect(self, query: str) -> Iterator[dict]:
         """Yield normalized business dicts for a single query."""
@@ -496,6 +499,10 @@ class MapsCollector:
 
             for place_url in listing_links:
                 if self._max_total and self._yielded_total >= self._max_total:
+                    # Global cap hit: record the short-circuit so the pipeline
+                    # can surface LIMIT_REACHED instead of silently marking the
+                    # remaining queries as done.
+                    self.limit_reached = True
                     break
                 if self._max_per_query and yielded >= self._max_per_query:
                     break

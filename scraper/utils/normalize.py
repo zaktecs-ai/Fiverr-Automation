@@ -310,11 +310,14 @@ _DUMMY_DOMAINS = {
 }
 
 # Usernames that are placeholders regardless of domain.
+# NOTE: legitimate role addresses (info@, admin@, webmaster@, sales@, …) are the
+# most common real business contact, so they are deliberately NOT here — only
+# unambiguous placeholders and no-reply/mailer-daemon addresses are rejected.
 _DUMMY_LOCAL = {
-    "info", "test", "testing", "example", "sample", "yourname", "name",
+    "test", "testing", "example", "sample", "yourname", "name",
     "user", "username", "email", "emailaddress", "you", "your", "someone",
     "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon",
-    "postmaster", "abuse", "admin", "webmaster",
+    "postmaster", "abuse",
 }
 
 # Substrings that indicate an asset/marketing/email-protection artifact, not a contact.

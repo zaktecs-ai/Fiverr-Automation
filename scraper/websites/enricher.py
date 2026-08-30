@@ -249,39 +249,51 @@ class WebsiteEnricher:
         return fr
 
     def _playwright_fetch(self, url: str) -> FetchResult:
-        """Escalate to Playwright for a JS-required/blocked page."""
+        """Escalate to Playwright for a JS-required/blocked page.
+
+        The semaphore is acquired BEFORE the context/page are created, and their
+        creation is wrapped in try/finally so a `new_page()` failure (or any
+        early throw) still closes the context — previously the context/page were
+        created before the semaphore and could leak when a page failed to open.
+        """
+        ctx = None
+        page = None
         try:
-            ctx = self._bm.new_context()
-            page = ctx.new_page()
-            # Bound browser-tab concurrency to `concurrency.playwright_workers`.
             with self._pw_sem:
+                ctx = self._bm.new_context()
+                page = ctx.new_page()
                 return self._playwright_scrape(ctx, page, url)
         except Exception as e:
             log.debug("playwright fallback failed %s: %s", url, e)
             return FetchResult(url=url, website_status="LIVE",
                                failure_reason=FailureReason.JS_REQUIRED)
+        finally:
+            # Close in reverse order; never let a partial open leak the context.
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+            if ctx is not None:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
 
     def _playwright_scrape(self, ctx, page, url: str) -> FetchResult:
         """Run the browser fetch (page already opened) under the semaphore."""
         try:
             page.set_default_timeout(self._cfg.get("website", {}).get(
                 "page_navigation_timeout_seconds", 30.0) * 1000)
-            try:
-                page.goto(url, wait_until="domcontentloaded",
-                          timeout=self._cfg.get("website", {}).get(
-                              "page_navigation_timeout_seconds", 30.0) * 1000)
-                html = page.content()
-                text = page.inner_text("body")
-                return FetchResult(url=url, status_code=200, html=html, text=text,
-                                   headers={}, final_url=page.url,
-                                   website_status="LIVE", failure_reason="",
-                                   used_playwright=True)
-            finally:
-                try:
-                    page.close()
-                    ctx.close()
-                except Exception:
-                    pass
+            page.goto(url, wait_until="domcontentloaded",
+                      timeout=self._cfg.get("website", {}).get(
+                          "page_navigation_timeout_seconds", 30.0) * 1000)
+            html = page.content()
+            text = page.inner_text("body")
+            return FetchResult(url=url, status_code=200, html=html, text=text,
+                               headers={}, final_url=page.url,
+                               website_status="LIVE", failure_reason="",
+                               used_playwright=True)
         except Exception as e:
             log.debug("playwright fallback failed %s: %s", url, e)
             return FetchResult(url=url, website_status="LIVE",
